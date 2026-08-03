@@ -924,7 +924,7 @@ async def service_flat_translate(
         chunk_size: int = Form(default_params["chunk_size"], description="文本分块大小"),
         temperature: float = Form(default_params["temperature"], description="温度 (0-1)"),
         top_p: float = Form(default_params["top_p"], description="核采样 (0-1)"),
-        timeout: int = Form(default_params["timeout"], description="单次请求超时时间(秒)"),
+        timeout: int = Form(default_params["timeout"], description="单个翻译分片总超时时间（包含全部重试，秒）"),
         retry: int = Form(default_params["retry"], description="失败重试次数"),
         thinking: str = Form("default", description="思考模式: default, enable, disable"),
         custom_prompt: Optional[str] = Form("", description="自定义系统提示词"),

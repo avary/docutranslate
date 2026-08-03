@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import asyncio
-import itertools
 import json
 import logging
 import re  # 新增：用于正则估算
@@ -75,7 +74,11 @@ class AgentConfig:
     temperature: float = 0.7
     top_p: float = 0.9
     concurrent: int = 30
-    timeout: int = 1200
+    timeout: int = 1200  # 单个分片包含限流等待、续写和全部重试的总时限（秒）
+    connect_timeout: float = 5.0
+    read_timeout: float | None = None  # None 时沿用 timeout，兼容旧版直接构造方式
+    write_timeout: float = 300.0
+    pool_timeout: float = 10.0
     thinking: ThinkingMode = "disable"
     retry: int = 2
     system_proxy_enable: bool = False
@@ -103,19 +106,6 @@ class TotalErrorCounter:
 
     def reach_limit(self):
         return self.count > self.max_errors_count
-
-
-class PromptsCounter:
-    def __init__(self, total: int, logger: logging.Logger):
-        self.lock = Lock()
-        self.count = 0
-        self.total = total
-        self.logger = logger
-
-    def add(self):
-        with self.lock:
-            self.count += 1
-            self.logger.info(f"多线程-已完成：{self.count}/{self.total}")
 
 
 # --- 新增 RateLimiter 类 ---
@@ -345,7 +335,17 @@ class Agent:
         self.temperature = config.temperature
         self.top_p = config.top_p
         self.max_concurrent = config.concurrent
-        self.timeout = httpx.Timeout(connect=5, read=config.timeout, write=300, pool=10)
+        # HTTPX 的 read timeout 只限制两次 socket 读取之间的空闲时间，
+        # 不能限制慢速响应的总耗时。保留原有分阶段超时的同时，将同一个
+        # 配置值作为单个分片（包含限流等待、续写和全部重试）的硬截止时间。
+        self.total_timeout_seconds = config.timeout
+        read_timeout = config.timeout if config.read_timeout is None else config.read_timeout
+        self.timeout = httpx.Timeout(
+            connect=config.connect_timeout,
+            read=read_timeout,
+            write=config.write_timeout,
+            pool=config.pool_timeout,
+        )
         self.thinking = config.thinking
         self.logger = config.logger
         self.total_error_counter = TotalErrorCounter(logger=self.logger)
@@ -837,7 +837,9 @@ class Agent:
         tpm_info = f", TPM:{self.rate_limiter.tpm}" if self.rate_limiter.tpm else ""
 
         self.logger.info(
-            f"provider:{self.provider},base-url:{self.baseurl},model-id:{self.model_id},concurrent:{max_concurrent}{rpm_info}{tpm_info},temperature:{self.temperature},system_proxy:{self.system_proxy_enable},json_output:{force_json}"
+            f"provider:{self.provider},base-url:{self.baseurl},model-id:{self.model_id},concurrent:{max_concurrent}{rpm_info}{tpm_info},temperature:{self.temperature},"
+            f"timeouts(total:{self.total_timeout_seconds}s,connect:{self.timeout.connect}s,read:{self.timeout.read}s,write:{self.timeout.write}s,pool:{self.timeout.pool}s),"
+            f"system_proxy:{self.system_proxy_enable},json_output:{force_json}"
         )
         self.logger.info(f"预计发送{total}个请求")
 
@@ -863,20 +865,39 @@ class Agent:
         async with httpx.AsyncClient(
                 trust_env=False, mounts=proxies, verify=False, limits=limits
         ) as client:
-            async def send_with_semaphore(p_text: str):
+            async def send_with_semaphore(p_text: str, prompt_index: int):
                 async with semaphore:
                     # 注意：我们在 semaphore 内部调用 send_async
                     # send_async 内部会调用 rate_limiter.acquire_async
                     # 这样可以防止并发过高，同时 rate_limiter 防止频率过快
-                    result = await self.send_async(
-                        client=client,
-                        prompt=p_text,
-                        system_prompt=system_prompt,
-                        force_json=force_json,
-                        pre_send_handler=pre_send_handler,
-                        result_handler=result_handler,
-                        error_result_handler=error_result_handler,
-                    )
+                    total_timeout = asyncio.timeout(self.total_timeout_seconds)
+                    try:
+                        async with total_timeout:
+                            result = await self.send_async(
+                                client=client,
+                                prompt=p_text,
+                                system_prompt=system_prompt,
+                                force_json=force_json,
+                                pre_send_handler=pre_send_handler,
+                                result_handler=result_handler,
+                                error_result_handler=error_result_handler,
+                            )
+                    except TimeoutError:
+                        # 只处理本层硬截止时间产生的 TimeoutError；业务处理器主动
+                        # 抛出的同名异常仍应正常向上传播，避免掩盖真实错误。
+                        if not total_timeout.expired():
+                            raise
+                        self.logger.error(
+                            f"分片 {prompt_index}/{total} 超过总时限 "
+                            f"{self.total_timeout_seconds} 秒，已终止该分片并使用降级结果。"
+                        )
+                        with self.unresolved_error_lock:
+                            self.unresolved_error_count += 1
+                        result = (
+                            p_text
+                            if error_result_handler is None
+                            else error_result_handler(p_text, self.logger)
+                        )
                     nonlocal count
                     count += 1
                     self.logger.info(f"协程-已完成{count}/{total}")
@@ -885,8 +906,8 @@ class Agent:
                         self.progress_callback(count, total)
                     return result
 
-            for p_text in prompts:
-                task = asyncio.create_task(send_with_semaphore(p_text))
+            for prompt_index, p_text in enumerate(prompts, start=1):
+                task = asyncio.create_task(send_with_semaphore(p_text, prompt_index))
                 tasks.append(task)
 
             results = await asyncio.gather(*tasks, return_exceptions=False)
@@ -1232,30 +1253,6 @@ class Agent:
                 else error_result_handler(prompt, self.logger)
             )
 
-    def _send_prompt_count(
-            self,
-            client: httpx.Client,
-            prompt: str,
-            system_prompt: None | str,
-            force_json,
-            count: PromptsCounter,
-            pre_send_handler,
-            result_handler,
-            error_result_handler
-    ) -> Any:
-        # 该方法在 ThreadPoolExecutor 中运行
-        result = self.send(
-            client,
-            prompt,
-            system_prompt,
-            force_json=force_json,
-            pre_send_handler=pre_send_handler,
-            result_handler=result_handler,
-            error_result_handler=error_result_handler,
-        )
-        count.add()
-        return result
-
     def send_prompts(
             self,
             prompts: list[str],
@@ -1265,67 +1262,28 @@ class Agent:
             result_handler: ResultHandlerType = None,
             error_result_handler: ErrorResultHandlerType = None,
     ) -> list[Any]:
-        rpm_info = f", RPM:{self.rate_limiter.rpm}" if self.rate_limiter.rpm else ""
-        tpm_info = f", TPM:{self.rate_limiter.tpm}" if self.rate_limiter.tpm else ""
-
-        self.logger.info(
-            f"provider:{self.provider},base-url:{self.baseurl},model-id:{self.model_id},concurrent:{self.max_concurrent}{rpm_info}{tpm_info},temperature:{self.temperature},system_proxy:{self.system_proxy_enable},json_output:{json_format}"
-        )
-        self.logger.info(
-            f"预计发送{len(prompts)}个请求"
-        )
-        self.total_error_counter.max_errors_count = (
-                len(prompts) // MAX_REQUESTS_PER_ERROR
-        )
-
-        self.unresolved_error_count = 0
-        self.token_counter.reset()
-        self._request_count = len(prompts)  # 记录请求数量
-
-        counter = PromptsCounter(len(prompts), self.logger)
-
-        system_prompts = itertools.repeat(system_prompt, len(prompts))
-        json_formats = itertools.repeat(json_format, len(prompts))
-        counters = itertools.repeat(counter, len(prompts))
-        pre_send_handlers = itertools.repeat(pre_send_handler, len(prompts))
-        result_handlers = itertools.repeat(result_handler, len(prompts))
-        error_result_handlers = itertools.repeat(error_result_handler, len(prompts))
-        limits = httpx.Limits(
-            max_connections=self.max_concurrent * 2,
-            max_keepalive_connections=self.max_concurrent,
-        )
-        proxies = get_httpx_proxies(asyn=False) if self.system_proxy_enable else None
-
-        with httpx.Client(
-                trust_env=False, mounts=proxies, verify=False, limits=limits
-        ) as client:
-            clients = itertools.repeat(client, len(prompts))
-            with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
-                results_iterator = executor.map(
-                    self._send_prompt_count,
-                    clients,
-                    prompts,
-                    system_prompts,
-                    json_formats,
-                    counters,
-                    pre_send_handlers,
-                    result_handlers,
-                    error_result_handlers,
+        def run_async_batch() -> list[Any]:
+            return asyncio.run(
+                self.send_prompts_async(
+                    prompts=prompts,
+                    system_prompt=system_prompt,
+                    force_json=json_format,
+                    pre_send_handler=pre_send_handler,
+                    result_handler=result_handler,
+                    error_result_handler=error_result_handler,
                 )
-                output_list = list(results_iterator)
+            )
 
-        self.logger.info(
-            f"所有请求处理完毕。未解决的错误总数: {self.unresolved_error_count}"
-        )
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 常规同步调用：直接创建临时事件循环。
+            return run_async_batch()
 
-        token_stats = self.token_counter.get_stats()
-        self.logger.info(
-            f"Token使用统计 - 输入: {token_stats['input_tokens'] / 1000:.2f}K(含cached: {token_stats['cached_tokens'] / 1000:.2f}K), "
-            f"输出: {token_stats['output_tokens'] / 1000:.2f}K(含reasoning: {token_stats['reasoning_tokens'] / 1000:.2f}K), "
-            f"总计: {token_stats['total_tokens'] / 1000:.2f}K"
-        )
-
-        return output_list
+        # 若同步 API 被误用于已有事件循环中，不能在同一线程调用 asyncio.run。
+        # 使用一个桥接线程保持原有同步行为；实际 HTTP 工作仍由可取消的异步实现完成。
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(run_async_batch).result()
 
     def get_full_stats(self) -> dict:
         """

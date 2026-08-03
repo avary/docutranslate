@@ -93,6 +93,13 @@ from docutranslate.exporter.pptx.pptx2html_exporter import PPTX2HTMLExporterConf
 
 
 MAX_LOG_HISTORY = 200
+AGENT_TIMEOUT_FIELDS = (
+    "timeout",
+    "connect_timeout",
+    "read_timeout",
+    "write_timeout",
+    "pool_timeout",
+)
 
 
 # --- Workflow dictionary ---
@@ -322,7 +329,7 @@ class TranslationService:
             # 从 BaseWorkflowParams 复制所有字段
             base_fields = [
                 "skip_translate", "base_url", "api_key", "model_id", "to_lang",
-                "chunk_size", "concurrent", "temperature", "top_p", "timeout", "thinking", "retry",
+                "chunk_size", "concurrent", "temperature", "top_p", *AGENT_TIMEOUT_FIELDS, "thinking", "retry",
                 "system_proxy_enable", "custom_prompt", "glossary_dict",
                 "glossary_generate_enable", "glossary_agent_config",
                 "force_json", "rpm", "tpm", "provider", "extra_body"
@@ -716,7 +723,7 @@ class TranslationService:
                     "chunk_size",
                     "concurrent",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -797,7 +804,7 @@ class TranslationService:
                     "insert_mode",
                     "separator",
                     "segment_mode",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -839,7 +846,7 @@ class TranslationService:
                     "concurrent",
                     "glossary_dict",
                     "json_paths",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -884,7 +891,7 @@ class TranslationService:
                     "translate_regions",
                     "office_password",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -928,7 +935,7 @@ class TranslationService:
                     "separator",
                     "office_password",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -971,7 +978,7 @@ class TranslationService:
                     "insert_mode",
                     "separator",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -1014,7 +1021,7 @@ class TranslationService:
                     "insert_mode",
                     "separator",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -1057,7 +1064,7 @@ class TranslationService:
                     "insert_mode",
                     "separator",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -1097,7 +1104,7 @@ class TranslationService:
                     "insert_mode",
                     "separator",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",
@@ -1140,7 +1147,7 @@ class TranslationService:
                     "insert_mode",
                     "separator",
                     "glossary_dict",
-                    "timeout",
+                    *AGENT_TIMEOUT_FIELDS,
                     "retry",
                     "system_proxy_enable",
                     "force_json",

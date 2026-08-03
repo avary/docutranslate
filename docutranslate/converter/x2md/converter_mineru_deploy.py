@@ -6,6 +6,17 @@ from typing import Literal, Hashable, List
 
 import httpx
 
+from docutranslate.config import (
+    MINERU_DEPLOY_CONNECT_TIMEOUT,
+    MINERU_DEPLOY_POOL_TIMEOUT,
+    MINERU_DEPLOY_READ_TIMEOUT,
+    MINERU_DEPLOY_UPLOAD_CONNECT_TIMEOUT,
+    MINERU_DEPLOY_UPLOAD_POOL_TIMEOUT,
+    MINERU_DEPLOY_UPLOAD_READ_TIMEOUT,
+    MINERU_DEPLOY_UPLOAD_WRITE_TIMEOUT,
+    MINERU_DEPLOY_WRITE_TIMEOUT,
+)
+
 from docutranslate.converter.x2md.base import X2MarkdownConverter, X2MarkdownConverterConfig
 from docutranslate.ir.attachment_manager import AttachMent
 from docutranslate.ir.document import Document
@@ -56,10 +67,17 @@ class ConverterMineruDeployConfig(X2MarkdownConverterConfig):
 
 # 配置HTTP客户端
 timeout = httpx.Timeout(
-    connect=5.0,
-    read=1800.0,  # 本地部署可能处理时间较长，增加读取超时
-    write=300.0,
-    pool=1.0
+    connect=MINERU_DEPLOY_CONNECT_TIMEOUT,
+    read=MINERU_DEPLOY_READ_TIMEOUT,  # 本地部署可能处理时间较长，增加读取超时
+    write=MINERU_DEPLOY_WRITE_TIMEOUT,
+    pool=MINERU_DEPLOY_POOL_TIMEOUT
+)
+
+upload_timeout = httpx.Timeout(
+    connect=MINERU_DEPLOY_UPLOAD_CONNECT_TIMEOUT,
+    read=MINERU_DEPLOY_UPLOAD_READ_TIMEOUT,
+    write=MINERU_DEPLOY_UPLOAD_WRITE_TIMEOUT,
+    pool=MINERU_DEPLOY_UPLOAD_POOL_TIMEOUT,
 )
 
 limits = httpx.Limits(max_connections=500, max_keepalive_connections=20)
@@ -113,7 +131,7 @@ class ConverterMineruDeploy(X2MarkdownConverter):
             self._api_url,
             files=files,
             data=self._build_form_data(),
-            timeout=2000,
+            timeout=upload_timeout,
         )
 
         response.raise_for_status()  # 检查是否有错误
@@ -145,7 +163,7 @@ class ConverterMineruDeploy(X2MarkdownConverter):
             self._api_url,
             files=files,
             data=self._build_form_data(),
-            timeout=2000,
+            timeout=upload_timeout,
         )
 
         response.raise_for_status()

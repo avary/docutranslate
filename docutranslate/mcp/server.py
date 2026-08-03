@@ -268,7 +268,7 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 temperature: LLM temperature parameter
                 top_p: LLM top_p parameter
                 retry: Number of retries for failed chunks
-                timeout: Request timeout in seconds
+                timeout: Total timeout per chunk, including all retries, in seconds
                 system_proxy_enable: Enable system proxy
                 force_json: Force JSON output
                 rpm: RPM limit (Requests Per Minute)
@@ -493,7 +493,7 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 chunk_size: Text chunk size for translation
                 concurrent: Number of concurrent requests
                 temperature: LLM temperature parameter
-                timeout: Request timeout in seconds
+                timeout: Total timeout per chunk, including all retries, in seconds
                 thinking: Thinking mode (default, enable, disable)
                 retry: Number of retries for failed chunks
                 system_proxy_enable: Enable system proxy

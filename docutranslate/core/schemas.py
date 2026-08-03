@@ -26,6 +26,7 @@ from docutranslate.agents.thinking.thinking_factory import ProviderType
 from docutranslate.config import (
     # BaseWorkflowParams defaults
     CHUNK_SIZE, CONCURRENT, TEMPERATURE, TOP_P, TIMEOUT,
+    CONNECT_TIMEOUT, READ_TIMEOUT, WRITE_TIMEOUT, POOL_TIMEOUT,
     THINKING, RETRY, SYSTEM_PROXY_ENABLE,
     # Env defaults for empty fields
     API_KEY, BASE_URL, MODEL_ID, TO_LANG, PROVIDER,
@@ -84,7 +85,19 @@ class GlossaryAgentConfigPayload(BaseModel):
     )
     concurrent: int = Field(default=30, description="Agent的最大并发请求数。")
     timeout: int = Field(
-        default=TIMEOUT, description="等待API回复的时间（秒）。"
+        default=TIMEOUT, description="单个分片包含限流等待、续写和全部重试的总时限（秒）。"
+    )
+    connect_timeout: float = Field(
+        default=CONNECT_TIMEOUT, description="每次建立TCP/TLS连接的超时时间（秒）。"
+    )
+    read_timeout: float = Field(
+        default=READ_TIMEOUT, description="两次网络读取之间允许的最大静默时间（秒）。"
+    )
+    write_timeout: float = Field(
+        default=WRITE_TIMEOUT, description="单次网络写入操作的超时时间（秒）。"
+    )
+    pool_timeout: float = Field(
+        default=POOL_TIMEOUT, description="等待HTTP连接池空闲连接的超时时间（秒）。"
     )
     thinking: ThinkingMode = Field(default="default", description="Agent的思考模式。")
     retry: int = Field(
@@ -164,7 +177,19 @@ class BaseWorkflowParams(BaseModel):
         default=TOP_P, description="LLM核采样参数。"
     )
     timeout: int = Field(
-        default=TIMEOUT, description="等待API回复的时间（秒）。"
+        default=TIMEOUT, description="单个分片包含限流等待、续写和全部重试的总时限（秒）。"
+    )
+    connect_timeout: float = Field(
+        default=CONNECT_TIMEOUT, description="每次建立TCP/TLS连接的超时时间（秒）。"
+    )
+    read_timeout: float = Field(
+        default=READ_TIMEOUT, description="两次网络读取之间允许的最大静默时间（秒）。"
+    )
+    write_timeout: float = Field(
+        default=WRITE_TIMEOUT, description="单次网络写入操作的超时时间（秒）。"
+    )
+    pool_timeout: float = Field(
+        default=POOL_TIMEOUT, description="等待HTTP连接池空闲连接的超时时间（秒）。"
     )
     thinking: ThinkingMode = Field(
         default=THINKING,
@@ -235,6 +260,11 @@ class BaseWorkflowParams(BaseModel):
                     "concurrent": CONCURRENT,
                     "temperature": TEMPERATURE,
                     "top_p": TOP_P,
+                    "timeout": TIMEOUT,
+                    "connect_timeout": CONNECT_TIMEOUT,
+                    "read_timeout": READ_TIMEOUT,
+                    "write_timeout": WRITE_TIMEOUT,
+                    "pool_timeout": POOL_TIMEOUT,
                     "retry": RETRY,
                     "system_proxy_enable": SYSTEM_PROXY_ENABLE,
                     "custom_prompt": CUSTOM_PROMPT,

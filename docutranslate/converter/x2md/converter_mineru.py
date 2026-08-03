@@ -10,6 +10,13 @@ from typing import Hashable, Literal, List, Tuple
 
 import httpx
 
+from docutranslate.config import (
+    MINERU_CONNECT_TIMEOUT,
+    MINERU_POOL_TIMEOUT,
+    MINERU_READ_TIMEOUT,
+    MINERU_WRITE_TIMEOUT,
+)
+
 # 尝试导入 pypdf，用于处理 PDF 拆分
 try:
     from pypdf import PdfReader, PdfWriter
@@ -43,10 +50,10 @@ class ConverterMineruConfig(X2MarkdownConverterConfig):
 
 
 timeout = httpx.Timeout(
-    connect=5.0,  # 连接超时 (建立连接的最长时间)
-    read=600.0,  # 读取超时 (等待服务器响应的最长时间)
-    write=600.0,  # 写入超时 (发送数据的最长时间)
-    pool=1.0  # 从连接池获取连接的超时时间
+    connect=MINERU_CONNECT_TIMEOUT,  # 连接超时 (建立连接的最长时间)
+    read=MINERU_READ_TIMEOUT,  # 读取超时 (等待服务器响应的最长时间)
+    write=MINERU_WRITE_TIMEOUT,  # 写入超时 (发送数据的最长时间)
+    pool=MINERU_POOL_TIMEOUT  # 从连接池获取连接的超时时间
 )
 
 limits = httpx.Limits(max_connections=500, max_keepalive_connections=20)
@@ -62,7 +69,7 @@ class ConverterMineru(X2MarkdownConverter):
         self.formula = config.formula_ocr
         self.model_version = config.model_version
         self.attachments: list[AttachMent] = []
-        self.max_pages = 200  # 每个切片最大页数
+        self.max_pages = 150  # 每个切片最大页数
         self.max_size_mb = 200  # 每个切片最大文件大小 (MB)
 
     def _get_header(self):
@@ -85,7 +92,7 @@ class ConverterMineru(X2MarkdownConverter):
     def _split_pdf(self, content: bytes) -> List[bytes]:
         """
         检查 PDF 页数和文件大小，如果超过限制则进行拆分。
-        每个切片 <= 200页 且 <= 200MB。
+        每个切片 <= 150页 且 <= 200MB。
         返回拆分后的 bytes 列表。如果不超限，返回包含原内容的单元素列表。
         """
         if not HAS_PYPDF:
