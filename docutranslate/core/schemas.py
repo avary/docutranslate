@@ -38,7 +38,8 @@ from docutranslate.config import (
     CONVERT_ENGINE, MD2DOCX_ENGINE, MINERU_TOKEN, MINERU_DEPLOY_BASE_URL,
     MODEL_VERSION, FORMULA_OCR, CODE_OCR, MINERU_LANGUAGE,
     MINERU_DEPLOY_BACKEND, MINERU_DEPLOY_PARSE_METHOD,
-    MINERU_DEPLOY_TABLE_ENABLE, MINERU_DEPLOY_FORMULA_ENABLE,
+    MINERU_DEPLOY_EFFORT, MINERU_DEPLOY_TABLE_ENABLE,
+    MINERU_DEPLOY_FORMULA_ENABLE, MINERU_DEPLOY_IMAGE_ANALYSIS,
     MINERU_DEPLOY_START_PAGE_ID, MINERU_DEPLOY_END_PAGE_ID, MINERU_DEPLOY_SERVER_URL,
     # TextWorkflowParams defaults
     INSERT_MODE, SEPARATOR, SEGMENT_MODE,
@@ -317,12 +318,15 @@ class UniversalParamsMixin(BaseModel):
     # MinerU Deploy 相关 - 设置默认值避免 None 导致的验证错误
     mineru_deploy_base_url: Optional[str] = None
     mineru_deploy_backend: Optional[Literal[
-        "pipeline", "vlm-auto-engine", "vlm-http-client",
-        "hybrid-auto-engine", "hybrid-http-client"
+        "pipeline", "vlm-engine", "vlm-http-client",
+        "hybrid-engine", "hybrid-http-client",
+        "vlm-auto-engine", "hybrid-auto-engine"
     ]] = None
+    mineru_deploy_effort: Optional[Literal["medium", "high"]] = None
     mineru_deploy_parse_method: Optional[Literal["auto", "txt", "ocr"]] = None
     mineru_deploy_table_enable: bool = True
     mineru_deploy_formula_enable: bool = True
+    mineru_deploy_image_analysis: bool = True
     mineru_deploy_start_page_id: int = 0
     mineru_deploy_end_page_id: int = 99999
     mineru_deploy_lang_list: Optional[List[str]] = None
@@ -401,15 +405,20 @@ class MarkdownWorkflowParams(BaseWorkflowParams):
     # --- UPDATED BACKEND LIST ---
     mineru_deploy_backend: Literal[
         "pipeline",
+        "vlm-engine",
         "vlm-auto-engine",
         "vlm-http-client",
+        "hybrid-engine",
         "hybrid-auto-engine",
         "hybrid-http-client"
     ] = Field(
         MINERU_DEPLOY_BACKEND,
         description="[仅当 convert_engine='mineru_deploy'] 本地部署的 MinerU 服务使用的后端。",
     )
-    # --- NEW PARAMETERS START ---
+    mineru_deploy_effort: Literal["medium", "high"] = Field(
+        MINERU_DEPLOY_EFFORT,
+        description="[仅当使用 hybrid backend] 解析强度：medium 更快，high 精度更高并支持图像分析。",
+    )
     mineru_deploy_parse_method: Literal["auto", "txt", "ocr"] = Field(
         MINERU_DEPLOY_PARSE_METHOD,
         description="[仅当 convert_engine='mineru_deploy'] 解析方法: auto, txt, ocr"
@@ -418,10 +427,13 @@ class MarkdownWorkflowParams(BaseWorkflowParams):
         MINERU_DEPLOY_TABLE_ENABLE,
         description="[仅当 convert_engine='mineru_deploy'] 本地部署的服务是否启用表格解析。",
     )
-    # --- NEW PARAMETERS END ---
     mineru_deploy_formula_enable: bool = Field(
         MINERU_DEPLOY_FORMULA_ENABLE,
         description="[仅当 convert_engine='mineru_deploy'] 本地部署的服务是否启用公式解析。",
+    )
+    mineru_deploy_image_analysis: bool = Field(
+        MINERU_DEPLOY_IMAGE_ANALYSIS,
+        description="[仅当 convert_engine='mineru_deploy'] 是否启用图片/图表分析；Hybrid medium 会由 MinerU 自动关闭。",
     )
     mineru_deploy_start_page_id: int = Field(
         MINERU_DEPLOY_START_PAGE_ID, description="[仅当 convert_engine='mineru_deploy'] 起始解析页面。"
@@ -450,11 +462,25 @@ class MarkdownWorkflowParams(BaseWorkflowParams):
                     "当 `convert_engine` 为 'mineru' 时，`mineru_token` 字段是必须的。"
                 )
         if self.convert_engine == "mineru_deploy":
+            backend_aliases = {
+                "vlm-auto-engine": "vlm-engine",
+                "hybrid-auto-engine": "hybrid-engine",
+            }
+            self.mineru_deploy_backend = backend_aliases.get(
+                self.mineru_deploy_backend, self.mineru_deploy_backend
+            )
             if not self.mineru_deploy_base_url and MINERU_DEPLOY_BASE_URL:
                 self.mineru_deploy_base_url = MINERU_DEPLOY_BASE_URL
             if not self.mineru_deploy_base_url:
                 raise ValueError(
                     "当 `convert_engine` 为 'mineru_deploy' 时，`mineru_deploy_base_url` 字段是必须的。"
+                )
+            if (
+                self.mineru_deploy_backend.endswith("-http-client")
+                and not self.mineru_deploy_server_url
+            ):
+                raise ValueError(
+                    "MinerU Deploy 使用 http-client backend 时，`mineru_deploy_server_url` 字段是必须的。"
                 )
         return self
 

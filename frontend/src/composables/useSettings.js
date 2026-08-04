@@ -70,12 +70,14 @@ export function useSettings() {
         model_version: 'vlm',
         mineru_language: 'ch',
         mineru_deploy_base_url: 'http://127.0.0.1:8000',
-        mineru_deploy_backend: 'hybrid-auto-engine',
+        mineru_deploy_backend: 'hybrid-engine',
+        mineru_deploy_effort: 'medium',
         mineru_deploy_parse_method: 'auto',
         mineru_deploy_start_page: 0,
         mineru_deploy_end_page: 99999,
         mineru_deploy_formula_enable: true,
         mineru_deploy_table_enable: true,
+        mineru_deploy_image_analysis: true,
         mineru_deploy_lang_list: [],
         mineru_deploy_server_url: '',
         formula_ocr: true,
@@ -171,12 +173,18 @@ export function useSettings() {
         form.model_version = storage.get('translator_model_version', 'vlm');
         form.mineru_language = storage.get('translator_mineru_language', 'ch');
         form.mineru_deploy_base_url = storage.get('mineru_deploy_base_url', 'http://127.0.0.1:8000');
-        form.mineru_deploy_backend = storage.get('mineru_deploy_backend', 'hybrid-auto-engine');
+        const savedMineruBackend = storage.get('mineru_deploy_backend', 'hybrid-engine');
+        form.mineru_deploy_backend = {
+            'vlm-auto-engine': 'vlm-engine',
+            'hybrid-auto-engine': 'hybrid-engine'
+        }[savedMineruBackend] || savedMineruBackend;
+        form.mineru_deploy_effort = storage.get('mineru_deploy_effort', 'medium');
         form.mineru_deploy_parse_method = storage.get('mineru_deploy_parse_method', 'auto');
         form.mineru_deploy_start_page = storage.getNum('mineru_deploy_start_page', 0);
         form.mineru_deploy_end_page = storage.getNum('mineru_deploy_end_page', 99999);
         form.mineru_deploy_formula_enable = storage.getBool('mineru_deploy_formula_enable', true);
         form.mineru_deploy_table_enable = storage.getBool('mineru_deploy_table_enable', true);
+        form.mineru_deploy_image_analysis = storage.getBool('mineru_deploy_image_analysis', true);
         form.mineru_deploy_server_url = storage.get('mineru_deploy_server_url', '');
         const savedLangList = localStorage.getItem('mineru_deploy_lang_list');
         form.mineru_deploy_lang_list = savedLangList ? JSON.parse(savedLangList) : [];
@@ -295,11 +303,13 @@ export function useSettings() {
         storage.set('translator_mineru_language', f.mineru_language);
         storage.set('mineru_deploy_base_url', f.mineru_deploy_base_url);
         storage.set('mineru_deploy_backend', f.mineru_deploy_backend);
+        storage.set('mineru_deploy_effort', f.mineru_deploy_effort);
         storage.set('mineru_deploy_parse_method', f.mineru_deploy_parse_method);
         storage.set('mineru_deploy_start_page', f.mineru_deploy_start_page);
         storage.set('mineru_deploy_end_page', f.mineru_deploy_end_page);
         storage.set('mineru_deploy_formula_enable', f.mineru_deploy_formula_enable);
         storage.set('mineru_deploy_table_enable', f.mineru_deploy_table_enable);
+        storage.set('mineru_deploy_image_analysis', f.mineru_deploy_image_analysis);
         storage.set('mineru_deploy_server_url', f.mineru_deploy_server_url);
         storage.set('mineru_deploy_lang_list', JSON.stringify(f.mineru_deploy_lang_list));
         storage.set('translator_formula_ocr', f.formula_ocr);

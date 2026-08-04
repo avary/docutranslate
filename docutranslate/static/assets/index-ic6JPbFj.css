@@ -22,12 +22,12 @@
   overflow: hidden;
 }
 
-.tooltip-enter-active[data-v-d4a929df],
-.tooltip-leave-active[data-v-d4a929df] {
+.tooltip-enter-active[data-v-34541830],
+.tooltip-leave-active[data-v-34541830] {
   transition: opacity 0.15s ease;
 }
-.tooltip-enter-from[data-v-d4a929df],
-.tooltip-leave-to[data-v-d4a929df] {
+.tooltip-enter-from[data-v-34541830],
+.tooltip-leave-to[data-v-34541830] {
   opacity: 0;
 }
 
@@ -1245,8 +1245,8 @@ video {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.whitespace-nowrap {
-  white-space: nowrap;
+.whitespace-normal {
+  white-space: normal;
 }
 .break-all {
   word-break: break-all;

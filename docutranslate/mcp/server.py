@@ -27,8 +27,9 @@ from docutranslate.config import (
     # MarkdownWorkflowParams defaults
     CONVERT_ENGINE, MD2DOCX_ENGINE, MINERU_TOKEN, MODEL_VERSION,
     FORMULA_OCR, CODE_OCR, MINERU_LANGUAGE,
-    MINERU_DEPLOY_BASE_URL, MINERU_DEPLOY_BACKEND, MINERU_DEPLOY_PARSE_METHOD,
-    MINERU_DEPLOY_TABLE_ENABLE, MINERU_DEPLOY_FORMULA_ENABLE,
+    MINERU_DEPLOY_BASE_URL, MINERU_DEPLOY_BACKEND, MINERU_DEPLOY_EFFORT,
+    MINERU_DEPLOY_PARSE_METHOD, MINERU_DEPLOY_TABLE_ENABLE,
+    MINERU_DEPLOY_FORMULA_ENABLE, MINERU_DEPLOY_IMAGE_ANALYSIS,
     MINERU_DEPLOY_START_PAGE_ID, MINERU_DEPLOY_END_PAGE_ID, MINERU_DEPLOY_SERVER_URL,
     # TextWorkflowParams defaults
     INSERT_MODE, SEPARATOR, SEGMENT_MODE,
@@ -169,9 +170,11 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
             # MinerU Deploy settings
             "mineru_deploy_base_url": MINERU_DEPLOY_BASE_URL,
             "mineru_deploy_backend": MINERU_DEPLOY_BACKEND,
+            "mineru_deploy_effort": MINERU_DEPLOY_EFFORT,
             "mineru_deploy_parse_method": MINERU_DEPLOY_PARSE_METHOD,
             "mineru_deploy_formula_enable": MINERU_DEPLOY_FORMULA_ENABLE,
             "mineru_deploy_table_enable": MINERU_DEPLOY_TABLE_ENABLE,
+            "mineru_deploy_image_analysis": MINERU_DEPLOY_IMAGE_ANALYSIS,
             "mineru_deploy_start_page_id": MINERU_DEPLOY_START_PAGE_ID,
             "mineru_deploy_end_page_id": MINERU_DEPLOY_END_PAGE_ID,
             "mineru_deploy_lang_list": None,  # List type, not supported via env
@@ -245,9 +248,11 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 # MinerU Deploy settings
                 mineru_deploy_base_url: Optional[str] = None,
                 mineru_deploy_backend: Optional[str] = None,
+                mineru_deploy_effort: Optional[str] = None,
                 mineru_deploy_parse_method: Optional[str] = None,
                 mineru_deploy_formula_enable: Optional[bool] = None,
                 mineru_deploy_table_enable: Optional[bool] = None,
+                mineru_deploy_image_analysis: Optional[bool] = None,
                 mineru_deploy_start_page_id: Optional[int] = None,
                 mineru_deploy_end_page_id: Optional[int] = None,
                 mineru_deploy_lang_list: Optional[List[str]] = None,
@@ -282,10 +287,12 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 code_ocr: Enable code block OCR
                 mineru_language: MinerU Cloud language option
                 mineru_deploy_base_url: MinerU local deployment base URL
-                mineru_deploy_backend: MinerU local backend type
+                mineru_deploy_backend: MinerU local backend type (pipeline, vlm-engine, vlm-http-client, hybrid-engine, hybrid-http-client)
+                mineru_deploy_effort: Hybrid parsing effort (medium, high)
                 mineru_deploy_parse_method: MinerU parse method (auto, txt, ocr)
                 mineru_deploy_formula_enable: Enable formula parsing
                 mineru_deploy_table_enable: Enable table parsing
+                mineru_deploy_image_analysis: Enable image/chart analysis
                 mineru_deploy_start_page_id: Start page ID
                 mineru_deploy_end_page_id: End page ID
                 mineru_deploy_lang_list: Language list
@@ -347,12 +354,16 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 client_config["mineru_deploy_base_url"] = mineru_deploy_base_url
             if mineru_deploy_backend is not None:
                 client_config["mineru_deploy_backend"] = mineru_deploy_backend
+            if mineru_deploy_effort is not None:
+                client_config["mineru_deploy_effort"] = mineru_deploy_effort
             if mineru_deploy_parse_method is not None:
                 client_config["mineru_deploy_parse_method"] = mineru_deploy_parse_method
             if mineru_deploy_formula_enable is not None:
                 client_config["mineru_deploy_formula_enable"] = mineru_deploy_formula_enable
             if mineru_deploy_table_enable is not None:
                 client_config["mineru_deploy_table_enable"] = mineru_deploy_table_enable
+            if mineru_deploy_image_analysis is not None:
+                client_config["mineru_deploy_image_analysis"] = mineru_deploy_image_analysis
             if mineru_deploy_start_page_id is not None:
                 client_config["mineru_deploy_start_page_id"] = mineru_deploy_start_page_id
             if mineru_deploy_end_page_id is not None:
@@ -458,9 +469,11 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 mineru_language: Optional[str] = None,
                 mineru_deploy_base_url: Optional[str] = None,
                 mineru_deploy_backend: Optional[str] = None,
+                mineru_deploy_effort: Optional[str] = None,
                 mineru_deploy_parse_method: Optional[str] = None,
                 mineru_deploy_table_enable: Optional[bool] = None,
                 mineru_deploy_formula_enable: Optional[bool] = None,
+                mineru_deploy_image_analysis: Optional[bool] = None,
                 mineru_deploy_start_page_id: Optional[int] = None,
                 mineru_deploy_end_page_id: Optional[int] = None,
                 mineru_deploy_lang_list: Optional[List[str]] = None,
@@ -510,10 +523,12 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
                 code_ocr: Enable code block OCR
                 mineru_language: MinerU Cloud language option (ch, ch_server, en, japan, korean, chinese_cht, ta, te, ka, el, th, latin, arabic, cyrillic, east_slavic, devanagari)
                 mineru_deploy_base_url: MinerU local deployment base URL
-                mineru_deploy_backend: MinerU local backend type
+                mineru_deploy_backend: MinerU local backend type (pipeline, vlm-engine, vlm-http-client, hybrid-engine, hybrid-http-client)
+                mineru_deploy_effort: Hybrid parsing effort (medium, high)
                 mineru_deploy_parse_method: MinerU parse method (auto, txt, ocr)
                 mineru_deploy_table_enable: Enable table parsing
                 mineru_deploy_formula_enable: Enable formula parsing
+                mineru_deploy_image_analysis: Enable image/chart analysis
                 mineru_deploy_start_page_id: Start page ID
                 mineru_deploy_end_page_id: End page ID
                 mineru_deploy_lang_list: Language list
@@ -692,6 +707,9 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
             use_mineru_deploy_backend = mineru_deploy_backend or client_config.get("mineru_deploy_backend")
             if use_mineru_deploy_backend:
                 payload_dict["mineru_deploy_backend"] = use_mineru_deploy_backend
+            use_mineru_deploy_effort = mineru_deploy_effort or client_config.get("mineru_deploy_effort")
+            if use_mineru_deploy_effort:
+                payload_dict["mineru_deploy_effort"] = use_mineru_deploy_effort
             use_mineru_deploy_parse_method = mineru_deploy_parse_method or client_config.get("mineru_deploy_parse_method")
             if use_mineru_deploy_parse_method:
                 payload_dict["mineru_deploy_parse_method"] = use_mineru_deploy_parse_method
@@ -701,6 +719,9 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
             use_mineru_deploy_formula_enable = mineru_deploy_formula_enable if mineru_deploy_formula_enable is not None else client_config.get("mineru_deploy_formula_enable")
             if use_mineru_deploy_formula_enable is not None:
                 payload_dict["mineru_deploy_formula_enable"] = use_mineru_deploy_formula_enable
+            use_mineru_deploy_image_analysis = mineru_deploy_image_analysis if mineru_deploy_image_analysis is not None else client_config.get("mineru_deploy_image_analysis")
+            if use_mineru_deploy_image_analysis is not None:
+                payload_dict["mineru_deploy_image_analysis"] = use_mineru_deploy_image_analysis
             use_mineru_deploy_start_page_id = mineru_deploy_start_page_id if mineru_deploy_start_page_id is not None else client_config.get("mineru_deploy_start_page_id")
             if use_mineru_deploy_start_page_id is not None:
                 payload_dict["mineru_deploy_start_page_id"] = use_mineru_deploy_start_page_id

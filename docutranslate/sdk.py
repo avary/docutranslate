@@ -228,10 +228,12 @@ class Client:
                 "east_slavic", "devanagari"
             ] = "ch",
             mineru_deploy_base_url: str = "http://127.0.0.1:8000",
-            mineru_deploy_backend: Literal["pipeline", "vlm-auto-engine", "vlm-http-client", "hybrid-auto-engine", "hybrid-http-client"] = "hybrid-auto-engine",
+            mineru_deploy_backend: Literal["pipeline", "vlm-engine", "vlm-http-client", "hybrid-engine", "hybrid-http-client", "vlm-auto-engine", "hybrid-auto-engine"] = "hybrid-engine",
+            mineru_deploy_effort: Literal["medium", "high"] = "medium",
             mineru_deploy_parse_method: Literal["auto", "txt", "ocr"] = "auto",
             mineru_deploy_formula_enable: bool = True,
             mineru_deploy_table_enable: bool = True,
+            mineru_deploy_image_analysis: bool = True,
             mineru_deploy_start_page_id: int = 0,
             mineru_deploy_end_page_id: int = 99999,
             mineru_deploy_lang_list: Optional[List[str]] = None,
@@ -309,10 +311,12 @@ class Client:
 
             # --- Mineru 本地部署参数 ---
             mineru_deploy_base_url: str = "http://127.0.0.1:8000",
-            mineru_deploy_backend: Literal["pipeline", "vlm-auto-engine", "vlm-http-client", "hybrid-auto-engine", "hybrid-http-client"] = "hybrid-auto-engine",
+            mineru_deploy_backend: Literal["pipeline", "vlm-engine", "vlm-http-client", "hybrid-engine", "hybrid-http-client", "vlm-auto-engine", "hybrid-auto-engine"] = "hybrid-engine",
+            mineru_deploy_effort: Literal["medium", "high"] = "medium",
             mineru_deploy_parse_method: Literal["auto", "txt", "ocr"] = "auto",
             mineru_deploy_formula_enable: bool = True,
             mineru_deploy_table_enable: bool = True,
+            mineru_deploy_image_analysis: bool = True,
             mineru_deploy_start_page_id: int = 0,
             mineru_deploy_end_page_id: int = 99999,
             mineru_deploy_lang_list: Optional[List[str]] = None,
@@ -342,6 +346,8 @@ class Client:
         :param convert_engine: [PDF/OCR] 解析引擎 (mineru, docling)。
         :param mineru_token: [Mineru Cloud] API Token。
         :param mineru_deploy_base_url: [Mineru Local] 本地服务地址。
+        :param mineru_deploy_effort: [Mineru Local] Hybrid 解析强度 (medium, high)。
+        :param mineru_deploy_image_analysis: [Mineru Local] 是否启用图片/图表分析。
         :param office_password: [Docx/Xlsx专用] 用于解密加密文件的密码。
         """
 

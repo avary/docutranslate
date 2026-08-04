@@ -79,7 +79,11 @@ def create_workflow_from_payload(payload: TranslatePayload, logger: logging.Logg
         elif payload.convert_engine == "mineru_deploy":
             converter_config = ConverterMineruDeployConfig(base_url=payload.mineru_deploy_base_url,
                                                            backend=payload.mineru_deploy_backend,
+                                                           effort=payload.mineru_deploy_effort,
+                                                           parse_method=payload.mineru_deploy_parse_method,
                                                            formula_enable=payload.mineru_deploy_formula_enable,
+                                                           table_enable=payload.mineru_deploy_table_enable,
+                                                           image_analysis=payload.mineru_deploy_image_analysis,
                                                            start_page_id=payload.mineru_deploy_start_page_id,
                                                            end_page_id=payload.mineru_deploy_end_page_id,
                                                            lang_list=payload.mineru_deploy_lang_list,
@@ -96,6 +100,7 @@ def create_workflow_from_payload(payload: TranslatePayload, logger: logging.Logg
             converter_config=converter_config,
             translator_config=translator_config,
             html_exporter_config=html_exporter_config,
+            md2docx_exporter_config=None,
             logger=logger,
         )
         return MarkdownBasedWorkflow(config=workflow_config)

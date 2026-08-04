@@ -211,7 +211,7 @@ result = client.translate(
     "path/to/your/document.pdf",
     convert_engine="mineru_deploy",
     mineru_deploy_base_url="http://127.0.0.1:8000",  # Địa chỉ MinerU cục bộ của bạn
-    mineru_deploy_backend="hybrid-auto-engine",  # Loại backend
+    mineru_deploy_backend="hybrid-engine",  # Loại backend
 )
 result.save(fmt="markdown")
 
@@ -273,8 +273,10 @@ print(f"Độ dài nội dung đã xuất: {len(base64_content)}")
 | **model_version** | `str` | `"vlm"` | Phiên bản model MinerU: `"pipeline"`, `"vlm"` |
 | **formula_ocr** | `bool` | `True` | Bật nhận dạng công thức OCR khi phân tích PDF |
 | **code_ocr** | `bool` | `True` | Bật nhận dạng mã OCR khi phân tích PDF |
-| **mineru_deploy_backend** | `str` | `"hybrid-auto-engine"` | Backend MinerU cục bộ: `"pipeline"`, `"vlm-auto-engine"`, `"vlm-http-client"`, `"hybrid-auto-engine"`, `"hybrid-http-client"` |
+| **mineru_deploy_backend** | `str` | `"hybrid-engine"` | Backend MinerU cục bộ: `"pipeline"`, `"vlm-engine"`, `"vlm-http-client"`, `"hybrid-engine"`, `"hybrid-http-client"` |
+| **mineru_deploy_effort** | `str` | `"medium"` | Mức phân tích Hybrid: `"medium"`, `"high"` |
 | **mineru_deploy_formula_enable** | `bool` | `True` | Bật nhận dạng công thức cho MinerU cục bộ |
+| **mineru_deploy_image_analysis** | `bool` | `True` | Bật phân tích hình ảnh/biểu đồ cho MinerU cục bộ |
 | **mineru_deploy_start_page_id** | `int` | 0 | ID trang bắt đầu phân tích MinerU cục bộ |
 | **mineru_deploy_end_page_id** | `int` | 99999 | ID trang kết thúc phân tích MinerU cục bộ |
 | **mineru_deploy_lang_list** | `list` | - | Danh sách ngôn ngữ phân tích MinerU cục bộ |

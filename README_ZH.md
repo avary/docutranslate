@@ -211,7 +211,7 @@ result = client.translate(
     "path/to/your/document.pdf",
     convert_engine="mineru_deploy",
     mineru_deploy_base_url="http://127.0.0.1:8000",  # 您的本地 MinerU 地址
-    mineru_deploy_backend="hybrid-auto-engine",  # 后端类型
+    mineru_deploy_backend="hybrid-engine",  # 后端类型
 )
 result.save(fmt="markdown")
 
@@ -272,8 +272,10 @@ print(f"导出内容长度: {len(base64_content)}")
 | **model_version** | `str` | `"vlm"` | MinerU 模型版本：`"pipeline"`、`"vlm"` |
 | **formula_ocr** | `bool` | `True` | PDF 解析启用公式 OCR |
 | **code_ocr** | `bool` | `True` | PDF 解析启用代码 OCR |
-| **mineru_deploy_backend** | `str` | `"hybrid-auto-engine"` | MinerU 本地后端：`"pipeline"`、`"vlm-auto-engine"`、`"vlm-http-client"`、`"hybrid-auto-engine"`、`"hybrid-http-client"` |
+| **mineru_deploy_backend** | `str` | `"hybrid-engine"` | MinerU 本地后端：`"pipeline"`、`"vlm-engine"`、`"vlm-http-client"`、`"hybrid-engine"`、`"hybrid-http-client"` |
+| **mineru_deploy_effort** | `str` | `"medium"` | Hybrid 解析强度：`"medium"`、`"high"` |
 | **mineru_deploy_formula_enable** | `bool` | `True` | 本地 MinerU 启用公式识别 |
+| **mineru_deploy_image_analysis** | `bool` | `True` | 本地 MinerU 启用图片/图表分析 |
 | **mineru_deploy_start_page_id** | `int` | 0 | 本地 MinerU 解析起始页 ID |
 | **mineru_deploy_end_page_id** | `int` | 99999 | 本地 MinerU 解析结束页 ID |
 | **mineru_deploy_lang_list** | `list` | - | 本地 MinerU 解析语言列表 |

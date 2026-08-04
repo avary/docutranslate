@@ -13,7 +13,7 @@
         <div
           v-if="visible"
           ref="tooltipRef"
-          class="fixed z-[1080] px-2 py-1 text-sm bg-gray-900 text-white rounded shadow-lg whitespace-nowrap"
+          class="fixed z-[1080] max-w-sm px-2 py-1 text-sm bg-gray-900 text-white rounded shadow-lg whitespace-normal"
           :style="tooltipStyle"
         >
           {{ content }}

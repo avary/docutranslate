@@ -211,7 +211,7 @@ result = client.translate(
     "path/to/your/document.pdf",
     convert_engine="mineru_deploy",
     mineru_deploy_base_url="http://127.0.0.1:8000",  # Your local MinerU address
-    mineru_deploy_backend="hybrid-auto-engine",  # Backend type
+    mineru_deploy_backend="hybrid-engine",  # Backend type
 )
 result.save(fmt="markdown")
 
@@ -272,8 +272,10 @@ print(f"Exported content length: {len(base64_content)}")
 | **model_version** | `str` | `"vlm"` | MinerU model version: `"pipeline"`, `"vlm"` |
 | **formula_ocr** | `bool` | `True` | Enable formula OCR for PDF parsing |
 | **code_ocr** | `bool` | `True` | Enable code OCR for PDF parsing |
-| **mineru_deploy_backend** | `str` | `"hybrid-auto-engine"` | MinerU local backend: `"pipeline"`, `"vlm-auto-engine"`, `"vlm-http-client"`, `"hybrid-auto-engine"`, `"hybrid-http-client"` |
+| **mineru_deploy_backend** | `str` | `"hybrid-engine"` | MinerU local backend: `"pipeline"`, `"vlm-engine"`, `"vlm-http-client"`, `"hybrid-engine"`, `"hybrid-http-client"` |
+| **mineru_deploy_effort** | `str` | `"medium"` | Hybrid parsing effort: `"medium"`, `"high"` |
 | **mineru_deploy_formula_enable** | `bool` | `True` | Enable formula recognition for local MinerU |
+| **mineru_deploy_image_analysis** | `bool` | `True` | Enable image/chart analysis for local MinerU |
 | **mineru_deploy_start_page_id** | `int` | 0 | Start page ID for local MinerU parsing |
 | **mineru_deploy_end_page_id** | `int` | 99999 | End page ID for local MinerU parsing |
 | **mineru_deploy_lang_list** | `list` | - | Language list for local MinerU parsing |

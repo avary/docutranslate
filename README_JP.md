@@ -211,7 +211,7 @@ result = client.translate(
     "path/to/your/document.pdf",
     convert_engine="mineru_deploy",
     mineru_deploy_base_url="http://127.0.0.1:8000",  # ローカル MinerU アドレス
-    mineru_deploy_backend="hybrid-auto-engine",  # バックエンドタイプ
+    mineru_deploy_backend="hybrid-engine",  # バックエンドタイプ
 )
 result.save(fmt="markdown")
 
@@ -272,8 +272,10 @@ print(f"エクスポートコンテンツ長さ: {len(base64_content)}")
 | **model_version** | `str` | `"vlm"` | MinerU モデルバージョン: `"pipeline"`、`"vlm"` |
 | **formula_ocr** | `bool` | `True` | PDF 解析で数式 OCR を有効化 |
 | **code_ocr** | `bool` | `True` | PDF 解析でコード OCR を有効化 |
-| **mineru_deploy_backend** | `str` | `"hybrid-auto-engine"` | MinerU ローカルバックエンド: `"pipeline"`、`"vlm-auto-engine"`、`"vlm-http-client"`、`"hybrid-auto-engine"`、`"hybrid-http-client"` |
+| **mineru_deploy_backend** | `str` | `"hybrid-engine"` | MinerU ローカルバックエンド: `"pipeline"`、`"vlm-engine"`、`"vlm-http-client"`、`"hybrid-engine"`、`"hybrid-http-client"` |
+| **mineru_deploy_effort** | `str` | `"medium"` | Hybrid 解析強度: `"medium"`、`"high"` |
 | **mineru_deploy_formula_enable** | `bool` | `True` | ローカル MinerU で数式認識を有効化 |
+| **mineru_deploy_image_analysis** | `bool` | `True` | ローカル MinerU で画像・チャート解析を有効化 |
 | **mineru_deploy_start_page_id** | `int` | 0 | ローカル MinerU 解析開始ページ ID |
 | **mineru_deploy_end_page_id** | `int` | 99999 | ローカル MinerU 解析終了ページ ID |
 | **mineru_deploy_lang_list** | `list` | - | ローカル MinerU 解析言語リスト |

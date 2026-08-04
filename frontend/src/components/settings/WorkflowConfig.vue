@@ -215,10 +215,25 @@
                             v-model="form.mineru_deploy_backend"
                             @change="saveSetting('mineru_deploy_backend', form.mineru_deploy_backend)">
                         <option value="pipeline">pipeline</option>
-                        <option value="vlm-auto-engine">vlm-auto-engine</option>
+                        <option value="vlm-engine">vlm-engine</option>
                         <option value="vlm-http-client">vlm-http-client</option>
-                        <option value="hybrid-auto-engine">hybrid-auto-engine</option>
+                        <option value="hybrid-engine">hybrid-engine</option>
                         <option value="hybrid-http-client">hybrid-http-client</option>
+                    </select>
+                </div>
+
+                <div class="mb-3" v-if="form.mineru_deploy_backend.startsWith('hybrid-')">
+                    <div class="flex items-center mb-1">
+                        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('mineruDeployEffortLabel') }}</label>
+                        <Tooltip :content="t('mineruDeployEffortTooltip')">
+                            <Heroicon name="QuestionMarkCircleIcon" class="w-4 h-4 ml-2 text-gray-400 cursor-help" />
+                        </Tooltip>
+                    </div>
+                    <select class="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary"
+                            v-model="form.mineru_deploy_effort"
+                            @change="saveSetting('mineru_deploy_effort', form.mineru_deploy_effort)">
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
                     </select>
                 </div>
 
@@ -235,7 +250,7 @@
 
                 <!-- Condition: If Backend is Pipeline or Hybrid, show Lang List -->
                 <div class="mb-3"
-                     v-if="['pipeline', 'hybrid-auto-engine', 'hybrid-http-client'].includes(form.mineru_deploy_backend)">
+                     v-if="['pipeline', 'hybrid-engine', 'hybrid-http-client'].includes(form.mineru_deploy_backend)">
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('mineruDeployLangListLabel') }}</label>
                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         <label v-for="lang in mineruLangOptions" :key="lang.val"
@@ -287,6 +302,14 @@
                         :label="t('mineruDeployTableEnableLabel')"
                         @update:modelValue="saveSetting('mineru_deploy_table_enable', form.mineru_deploy_table_enable)"
                         class="mb-2" />
+                <div class="flex items-center mb-2">
+                    <Toggle v-model="form.mineru_deploy_image_analysis"
+                            :label="t('mineruDeployImageAnalysisLabel')"
+                            @update:modelValue="saveSetting('mineru_deploy_image_analysis', form.mineru_deploy_image_analysis)" />
+                    <Tooltip :content="t('mineruDeployImageAnalysisTooltip')">
+                        <Heroicon name="QuestionMarkCircleIcon" class="w-4 h-4 ml-2 text-gray-400 cursor-help" />
+                    </Tooltip>
+                </div>
             </div>
 
 
@@ -327,6 +350,7 @@ import { capitalize } from '../../utils/helpers';
 import Collapse from '../ui/Collapse.vue';
 import Button from '../ui/Button.vue';
 import Toggle from '../ui/Toggle.vue';
+import Tooltip from '../ui/Tooltip.vue';
 import Heroicon from '../ui/Heroicon.vue';
 
 const props = defineProps({

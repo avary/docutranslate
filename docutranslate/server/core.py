@@ -344,8 +344,10 @@ class TranslationService:
             universal_fields = [
                 "convert_engine", "mineru_token", "model_version", "formula_ocr", "code_ocr",
                 "mineru_language",
-                "mineru_deploy_base_url", "mineru_deploy_backend", "mineru_deploy_parse_method",
+                "mineru_deploy_base_url", "mineru_deploy_backend", "mineru_deploy_effort",
+                "mineru_deploy_parse_method",
                 "mineru_deploy_table_enable", "mineru_deploy_formula_enable",
+                "mineru_deploy_image_analysis",
                 "mineru_deploy_start_page_id", "mineru_deploy_end_page_id",
                 "mineru_deploy_lang_list", "mineru_deploy_server_url",
                 "insert_mode", "separator", "translate_regions", "json_paths", "md2docx_engine"
@@ -756,9 +758,11 @@ class TranslationService:
                 converter_config = ConverterMineruDeployConfig(
                     base_url=payload.mineru_deploy_base_url,
                     backend=payload.mineru_deploy_backend,
+                    effort=payload.mineru_deploy_effort,
                     parse_method=payload.mineru_deploy_parse_method,
                     formula_enable=payload.mineru_deploy_formula_enable,
                     table_enable=payload.mineru_deploy_table_enable,
+                    image_analysis=payload.mineru_deploy_image_analysis,
                     start_page_id=payload.mineru_deploy_start_page_id,
                     end_page_id=payload.mineru_deploy_end_page_id,
                     lang_list=payload.mineru_deploy_lang_list,
