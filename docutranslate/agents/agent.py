@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import asyncio
+import codecs
 import json
 import logging
 import re  # 新增：用于正则估算
@@ -17,6 +18,7 @@ import httpx
 
 from docutranslate.agents.provider import get_provider_by_domain
 from docutranslate.agents.thinking.thinking_factory import get_thinking_mode, ProviderType
+from docutranslate.config import LLM_STREAMING, NON_STREAM_TIMEOUT, STREAM_IDLE_TIMEOUT
 from docutranslate.logger import global_logger
 from docutranslate.utils.utils import get_httpx_proxies
 
@@ -47,6 +49,138 @@ def _parse_response_json(response: httpx.Response) -> dict:
         raise json.JSONDecodeError("Expecting value", text, 0)
     # 从第一个非空白字符开始解析
     return json.loads(stripped_text)
+
+
+def _content_to_text(content: Any) -> str:
+    """将 OpenAI 兼容接口的多种 content 形态统一为字符串。"""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            text = item.get("text", item.get("content", ""))
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+class _StreamingResponseAccumulator:
+    """增量解析 OpenAI 兼容的 SSE/NDJSON，并聚合为原来的响应字典。"""
+
+    def __init__(self):
+        self._decoder = codecs.getincrementaldecoder("utf-8")()
+        self._line_buffer = ""
+        self._event_data: list[str] = []
+        self._content: list[str] = []
+        self._finish_reason = None
+        self._usage: dict | None = None
+        self._saw_payload = False
+        self.done = False
+
+    def feed(self, chunk: bytes):
+        self._feed_text(self._decoder.decode(chunk))
+
+    def _feed_text(self, text: str):
+        self._line_buffer += text
+        while "\n" in self._line_buffer:
+            line, self._line_buffer = self._line_buffer.split("\n", 1)
+            self._handle_line(line.rstrip("\r"))
+
+    def _handle_line(self, line: str):
+        if not line:
+            self._dispatch_event()
+            return
+        if line.startswith(":"):
+            # SSE heartbeat/comment。收到原始字节时空闲计时器已经重置。
+            return
+        if line.startswith("data:"):
+            self._event_data.append(line[5:].lstrip())
+            return
+        if line.startswith(("event:", "id:", "retry:")):
+            return
+
+        # 兼容部分本地 OpenAI 服务使用的 NDJSON。
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            self._consume_payload(stripped)
+
+    def _dispatch_event(self):
+        if not self._event_data:
+            return
+        payload = "\n".join(self._event_data)
+        self._event_data.clear()
+        self._consume_payload(payload)
+
+    def _consume_payload(self, payload: str):
+        if payload.strip() == "[DONE]":
+            self.done = True
+            return
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get("error"):
+            raise ValueError(f"流式响应返回错误: {data['error']}")
+
+        self._saw_payload = True
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._usage = usage
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            return
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None:
+            self._finish_reason = finish_reason
+
+        delta = choice.get("delta")
+        message = choice.get("message")
+        if isinstance(delta, dict):
+            content = delta.get("content")
+        elif isinstance(message, dict):
+            content = message.get("content")
+        else:
+            content = choice.get("text")
+        text = _content_to_text(content)
+        if text:
+            self._content.append(text)
+
+    def finish(self, raw_body: bytes) -> dict:
+        tail = self._decoder.decode(b"", final=True)
+        if tail:
+            self._feed_text(tail)
+        if self._line_buffer:
+            self._handle_line(self._line_buffer.rstrip("\r"))
+            self._line_buffer = ""
+        self._dispatch_event()
+
+        if self._saw_payload:
+            result = {
+                "choices": [{
+                    "message": {"content": "".join(self._content)},
+                    "finish_reason": self._finish_reason,
+                }]
+            }
+            if self._usage is not None:
+                result["usage"] = self._usage
+            return result
+
+        # 有些兼容服务会忽略 stream=true，直接返回普通 JSON。
+        text = raw_body.decode("utf-8-sig").lstrip()
+        if not text:
+            raise json.JSONDecodeError("Expecting value", text, 0)
+        return json.loads(text)
 
 
 class AgentResultError(ValueError):
@@ -88,6 +222,10 @@ class AgentConfig:
     provider: ProviderType | None = None
     progress_callback: Callable[[int,int],None]|None = None  # 进度回调 (current: int, total: int) -> None
     extra_body: str | None = None  # JSON字符串格式的额外请求体参数
+    # 以下字段仅扩展内部传输策略，不改变现有公开方法和 Web/API 请求结构。
+    streaming: bool = LLM_STREAMING
+    stream_idle_timeout: float = STREAM_IDLE_TIMEOUT
+    non_stream_timeout: float | None = NON_STREAM_TIMEOUT
 
 
 class TotalErrorCounter:
@@ -335,10 +473,12 @@ class Agent:
         self.temperature = config.temperature
         self.top_p = config.top_p
         self.max_concurrent = config.concurrent
-        # HTTPX 的 read timeout 只限制两次 socket 读取之间的空闲时间，
-        # 不能限制慢速响应的总耗时。保留原有分阶段超时的同时，将同一个
-        # 配置值作为单个分片（包含限流等待、续写和全部重试）的硬截止时间。
-        self.total_timeout_seconds = config.timeout
+        # 流式和非流式使用两套独立策略：流式仅限制连续静默时间；
+        # 非流式保留硬总时限。旧 timeout/read_timeout 配置仍用于非流式。
+        self.non_stream_total_timeout_seconds = (
+            config.timeout if config.non_stream_timeout is None else config.non_stream_timeout
+        )
+        self.total_timeout_seconds = self.non_stream_total_timeout_seconds
         read_timeout = config.timeout if config.read_timeout is None else config.read_timeout
         self.timeout = httpx.Timeout(
             connect=config.connect_timeout,
@@ -346,6 +486,15 @@ class Agent:
             write=config.write_timeout,
             pool=config.pool_timeout,
         )
+        self.stream_idle_timeout_seconds = config.stream_idle_timeout
+        self.stream_timeout = httpx.Timeout(
+            connect=config.connect_timeout,
+            read=self.stream_idle_timeout_seconds,
+            write=config.write_timeout,
+            pool=config.pool_timeout,
+        )
+        self.streaming_enabled = config.streaming
+        self._streaming_disabled = not config.streaming
         self.thinking = config.thinking
         self.logger = config.logger
         self.total_error_counter = TotalErrorCounter(logger=self.logger)
@@ -362,6 +511,152 @@ class Agent:
 
         self.provider = config.provider if config.provider is not None else get_provider_by_domain(self.domain)
         self.extra_body = config.extra_body
+
+    async def _request_completion_async(
+            self,
+            client: httpx.AsyncClient,
+            data: dict,
+            headers: dict,
+    ) -> dict:
+        """请求一次 completion；优先流式，明确不支持时自动兼容非流式。"""
+        if self._streaming_disabled:
+            return await self._request_non_stream_async(client, data, headers)
+
+        stream_data = dict(data)
+        stream_data["stream"] = True
+        try:
+            async with client.stream(
+                    "POST",
+                    f"{self.baseurl}/chat/completions",
+                    json=stream_data,
+                    headers=headers,
+                    timeout=self.stream_timeout,
+            ) as response:
+                if response.is_error:
+                    await response.aread()
+                response.raise_for_status()
+                if response.is_stream_consumed:
+                    accumulator = _StreamingResponseAccumulator()
+                    accumulator.feed(response.content)
+                    return accumulator.finish(response.content)
+                accumulator = _StreamingResponseAccumulator()
+                raw_body = bytearray()
+                iterator = response.aiter_raw()
+                while not accumulator.done:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            anext(iterator), timeout=self.stream_idle_timeout_seconds
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as exc:
+                        raise httpx.ReadTimeout(
+                            f"流式响应连续 {self.stream_idle_timeout_seconds} 秒无活动",
+                            request=response.request,
+                        ) from exc
+                    if not chunk:
+                        continue
+                    raw_body.extend(chunk)
+                    accumulator.feed(chunk)
+                return accumulator.finish(bytes(raw_body))
+        except httpx.HTTPStatusError as stream_error:
+            # 仅对常见的“不支持 stream 参数/端点”状态进行一次非流式兼容尝试。
+            if stream_error.response.status_code not in {400, 404, 405, 415, 422, 501}:
+                raise
+            self.logger.warning(
+                f"当前 LLM 接口拒绝流式请求 ({stream_error.response.status_code})，"
+                "尝试兼容非流式响应。"
+            )
+            self._streaming_disabled = True
+            result = await self._request_non_stream_async(client, data, headers)
+            return result
+
+    async def _request_non_stream_async(
+            self,
+            client: httpx.AsyncClient,
+            data: dict,
+            headers: dict,
+    ) -> dict:
+        """执行非流式请求，并施加与流式空闲窗口独立的硬总时限。"""
+        total_timeout = asyncio.timeout(self.non_stream_total_timeout_seconds)
+        try:
+            async with total_timeout:
+                response = await client.post(
+                    f"{self.baseurl}/chat/completions",
+                    json=data,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+        except TimeoutError as exc:
+            if not total_timeout.expired():
+                raise
+            raise httpx.ReadTimeout(
+                f"非流式请求超过硬总时限 {self.non_stream_total_timeout_seconds} 秒"
+            ) from exc
+        response.raise_for_status()
+        return _parse_response_json(response)
+
+    def _request_completion_sync(
+            self,
+            client: httpx.Client,
+            data: dict,
+            headers: dict,
+    ) -> dict:
+        """同步入口的流式兼容实现；实际 socket 空闲检测由 HTTPX read timeout 完成。"""
+        if self._streaming_disabled:
+            response = client.post(
+                f"{self.baseurl}/chat/completions",
+                json=data,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return _parse_response_json(response)
+
+        stream_data = dict(data)
+        stream_data["stream"] = True
+        try:
+            with client.stream(
+                    "POST",
+                    f"{self.baseurl}/chat/completions",
+                    json=stream_data,
+                    headers=headers,
+                    timeout=self.stream_timeout,
+            ) as response:
+                if response.is_error:
+                    response.read()
+                response.raise_for_status()
+                if response.is_stream_consumed:
+                    accumulator = _StreamingResponseAccumulator()
+                    accumulator.feed(response.content)
+                    return accumulator.finish(response.content)
+                accumulator = _StreamingResponseAccumulator()
+                raw_body = bytearray()
+                for chunk in response.iter_raw():
+                    if not chunk:
+                        continue
+                    raw_body.extend(chunk)
+                    accumulator.feed(chunk)
+                    if accumulator.done:
+                        break
+                return accumulator.finish(bytes(raw_body))
+        except httpx.HTTPStatusError as stream_error:
+            if stream_error.response.status_code not in {400, 404, 405, 415, 422, 501}:
+                raise
+            self.logger.warning(
+                f"当前 LLM 接口拒绝流式请求 ({stream_error.response.status_code})，"
+                "尝试兼容非流式响应。"
+            )
+            self._streaming_disabled = True
+            response = client.post(
+                f"{self.baseurl}/chat/completions",
+                json=data,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            result = _parse_response_json(response)
+            return result
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -526,14 +821,7 @@ class Agent:
         headers, data = self._prepare_request_data(continue_prompt, system_prompt, json_format=force_json)
 
         try:
-            response = await client.post(
-                f"{self.baseurl}/chat/completions",
-                json=data,
-                headers=headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            response_data = _parse_response_json(response)
+            response_data = await self._request_completion_async(client, data, headers)
 
             # 安全提取 choices 和 content
             choices = response_data.get("choices", [])
@@ -640,14 +928,7 @@ class Agent:
         input_tokens = 0
         output_tokens = 0
         try:
-            response = await client.post(
-                f"{self.baseurl}/chat/completions",
-                json=data,
-                headers=headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            response_data = _parse_response_json(response)
+            response_data = await self._request_completion_async(client, data, headers)
 
             # 检查 finish_reason
             choices = response_data.get("choices", [])
@@ -835,10 +1116,13 @@ class Agent:
         total = len(prompts)
         rpm_info = f", RPM:{self.rate_limiter.rpm}" if self.rate_limiter.rpm else ""
         tpm_info = f", TPM:{self.rate_limiter.tpm}" if self.rate_limiter.tpm else ""
+        transport_mode = "non-stream" if self._streaming_disabled else "stream"
 
         self.logger.info(
             f"provider:{self.provider},base-url:{self.baseurl},model-id:{self.model_id},concurrent:{max_concurrent}{rpm_info}{tpm_info},temperature:{self.temperature},"
-            f"timeouts(total:{self.total_timeout_seconds}s,connect:{self.timeout.connect}s,read:{self.timeout.read}s,write:{self.timeout.write}s,pool:{self.timeout.pool}s),"
+            f"transport:{transport_mode},timeouts(stream-idle:{self.stream_idle_timeout_seconds}s,stream-total:none,"
+            f"non-stream-total:{self.non_stream_total_timeout_seconds}s,non-stream-read:{self.timeout.read}s,"
+            f"connect:{self.timeout.connect}s,write:{self.timeout.write}s,pool:{self.timeout.pool}s),"
             f"system_proxy:{self.system_proxy_enable},json_output:{force_json}"
         )
         self.logger.info(f"预计发送{total}个请求")
@@ -870,34 +1154,42 @@ class Agent:
                     # 注意：我们在 semaphore 内部调用 send_async
                     # send_async 内部会调用 rate_limiter.acquire_async
                     # 这样可以防止并发过高，同时 rate_limiter 防止频率过快
-                    total_timeout = asyncio.timeout(self.total_timeout_seconds)
-                    try:
-                        async with total_timeout:
-                            result = await self.send_async(
-                                client=client,
-                                prompt=p_text,
-                                system_prompt=system_prompt,
-                                force_json=force_json,
-                                pre_send_handler=pre_send_handler,
-                                result_handler=result_handler,
-                                error_result_handler=error_result_handler,
+                    async def perform_send():
+                        return await self.send_async(
+                            client=client,
+                            prompt=p_text,
+                            system_prompt=system_prompt,
+                            force_json=force_json,
+                            pre_send_handler=pre_send_handler,
+                            result_handler=result_handler,
+                            error_result_handler=error_result_handler,
+                        )
+
+                    if self._streaming_disabled:
+                        total_timeout = asyncio.timeout(self.non_stream_total_timeout_seconds)
+                        try:
+                            async with total_timeout:
+                                result = await perform_send()
+                        except TimeoutError:
+                            # 非流式模式继续保留旧版“整个分片”的硬截止时间。
+                            if not total_timeout.expired():
+                                raise
+                            self.logger.error(
+                                f"非流式分片 {prompt_index}/{total} 超过总时限 "
+                                f"{self.non_stream_total_timeout_seconds} 秒，"
+                                "已终止该分片并使用降级结果。"
                             )
-                    except TimeoutError:
-                        # 只处理本层硬截止时间产生的 TimeoutError；业务处理器主动
-                        # 抛出的同名异常仍应正常向上传播，避免掩盖真实错误。
-                        if not total_timeout.expired():
-                            raise
-                        self.logger.error(
-                            f"分片 {prompt_index}/{total} 超过总时限 "
-                            f"{self.total_timeout_seconds} 秒，已终止该分片并使用降级结果。"
-                        )
-                        with self.unresolved_error_lock:
-                            self.unresolved_error_count += 1
-                        result = (
-                            p_text
-                            if error_result_handler is None
-                            else error_result_handler(p_text, self.logger)
-                        )
+                            with self.unresolved_error_lock:
+                                self.unresolved_error_count += 1
+                            result = (
+                                p_text
+                                if error_result_handler is None
+                                else error_result_handler(p_text, self.logger)
+                            )
+                    else:
+                        # DeepSeek Harness 风格：流式请求没有总墙钟上限，
+                        # 仅由每次收到原始数据都会重置的 idle watchdog 判定超时。
+                        result = await perform_send()
                     nonlocal count
                     count += 1
                     self.logger.info(f"协程-已完成{count}/{total}")
@@ -971,14 +1263,7 @@ class Agent:
         headers, data = self._prepare_request_data(continue_prompt, system_prompt, json_format=force_json)
 
         try:
-            response = client.post(
-                f"{self.baseurl}/chat/completions",
-                json=data,
-                headers=headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            response_data = _parse_response_json(response)
+            response_data = self._request_completion_sync(client, data, headers)
 
             # 安全提取 choices 和 content
             choices = response_data.get("choices", [])
@@ -1079,14 +1364,7 @@ class Agent:
         current_partial_result = None
 
         try:
-            response = client.post(
-                f"{self.baseurl}/chat/completions",
-                json=data,
-                headers=headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            response_data = _parse_response_json(response)
+            response_data = self._request_completion_sync(client, data, headers)
 
             # 检查 finish_reason
             choices = response_data.get("choices", [])

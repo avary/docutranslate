@@ -86,13 +86,13 @@ class GlossaryAgentConfigPayload(BaseModel):
     )
     concurrent: int = Field(default=30, description="Agent的最大并发请求数。")
     timeout: int = Field(
-        default=TIMEOUT, description="单个分片包含限流等待、续写和全部重试的总时限（秒）。"
+        default=TIMEOUT, description="非流式分片的兼容硬总时限（秒）；流式模式使用独立的滑动空闲超时。"
     )
     connect_timeout: float = Field(
         default=CONNECT_TIMEOUT, description="每次建立TCP/TLS连接的超时时间（秒）。"
     )
     read_timeout: float = Field(
-        default=READ_TIMEOUT, description="两次网络读取之间允许的最大静默时间（秒）。"
+        default=READ_TIMEOUT, description="非流式两次网络读取之间允许的最大静默时间（秒）。"
     )
     write_timeout: float = Field(
         default=WRITE_TIMEOUT, description="单次网络写入操作的超时时间（秒）。"
@@ -178,13 +178,13 @@ class BaseWorkflowParams(BaseModel):
         default=TOP_P, description="LLM核采样参数。"
     )
     timeout: int = Field(
-        default=TIMEOUT, description="单个分片包含限流等待、续写和全部重试的总时限（秒）。"
+        default=TIMEOUT, description="非流式分片的兼容硬总时限（秒）；流式模式使用独立的滑动空闲超时。"
     )
     connect_timeout: float = Field(
         default=CONNECT_TIMEOUT, description="每次建立TCP/TLS连接的超时时间（秒）。"
     )
     read_timeout: float = Field(
-        default=READ_TIMEOUT, description="两次网络读取之间允许的最大静默时间（秒）。"
+        default=READ_TIMEOUT, description="非流式两次网络读取之间允许的最大静默时间（秒）。"
     )
     write_timeout: float = Field(
         default=WRITE_TIMEOUT, description="单次网络写入操作的超时时间（秒）。"

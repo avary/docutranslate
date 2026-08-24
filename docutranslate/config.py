@@ -85,6 +85,16 @@ def _get_env_optional_int(key: str) -> Optional[int]:
     return None
 
 
+def _get_env_optional_float(key: str) -> Optional[float]:
+    val = os.environ.get(key)
+    if val:
+        try:
+            return float(val)
+        except ValueError:
+            pass
+    return None
+
+
 def _get_env_optional_str(key: str) -> Optional[str]:
     val = os.environ.get(key)
     return val if val else None
@@ -108,6 +118,12 @@ CHUNK_SIZE = _get_env_int("DOCUTRANSLATE_CHUNK_SIZE", 4000)
 CONCURRENT = _get_env_int("DOCUTRANSLATE_CONCURRENT", 30)
 TEMPERATURE = _get_env_float("DOCUTRANSLATE_TEMPERATURE", 0.7)
 TOP_P = _get_env_float("DOCUTRANSLATE_TOP_P", 0.9)
+# LLM 默认使用 DeepSeek Harness 风格的流式空闲超时：只要服务端持续
+# 发送数据/心跳，就不施加总墙钟上限。
+LLM_STREAMING = _get_env_bool("DOCUTRANSLATE_LLM_STREAMING", True)
+STREAM_IDLE_TIMEOUT = _get_env_float("DOCUTRANSLATE_STREAM_IDLE_TIMEOUT", 300.0)
+# 非流式硬超时为可选覆盖；未设置时继续沿用 DOCUTRANSLATE_TIMEOUT。
+NON_STREAM_TIMEOUT = _get_env_optional_float("DOCUTRANSLATE_NON_STREAM_TIMEOUT")
 TIMEOUT = _get_env_int("DOCUTRANSLATE_TIMEOUT", 1200)
 CONNECT_TIMEOUT = _get_env_float("DOCUTRANSLATE_CONNECT_TIMEOUT", 5.0)
 # 未单独配置时沿用总超时，保持旧版 DOCUTRANSLATE_TIMEOUT 的行为兼容。
