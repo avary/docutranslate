@@ -109,6 +109,8 @@ class PPTXTranslator(AiTranslator):
                 thinking=config.thinking, concurrent=config.concurrent, timeout=config.timeout,
                 connect_timeout=config.connect_timeout, read_timeout=config.read_timeout,
                 write_timeout=config.write_timeout, pool_timeout=config.pool_timeout,
+                streaming=config.streaming, stream_idle_timeout=config.stream_idle_timeout,
+                non_stream_timeout=config.non_stream_timeout,
                 logger=self.logger, glossary_dict=glossary_dict, retry=config.retry,
                 system_proxy_enable=config.system_proxy_enable, force_json=config.force_json,
                 rpm=config.rpm,

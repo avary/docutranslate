@@ -6,6 +6,11 @@ dist/
 wheels/
 *.egg-info
 tests/
+!tests/
+tests/*
+!tests/test_contract/
+tests/test_contract/*
+!tests/test_contract/test_interface_contract.py
 tests/resource/
 tests/test_data/
 htmlcov/
