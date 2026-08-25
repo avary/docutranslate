@@ -87,6 +87,73 @@ class DeepSeekUsageParser(OpenAIUsageParser):
         return parsed[0], cached_tokens, parsed[2], parsed[3], parsed[4]
 
 
+class MiniMaxUsageParser(OpenAIUsageParser):
+    """MiniMax OpenAI-compatible token usage."""
+
+    name = "minimax"
+
+
+class MiMoUsageParser(OpenAIUsageParser):
+    """MiMo Chat Completions and Responses-compatible token usage."""
+
+    name = "mimo"
+
+
+class BigModelUsageParser(OpenAIUsageParser):
+    """Zhipu BigModel token usage, including cache and reasoning details."""
+
+    name = "bigmodel"
+
+
+class VolcEngineUsageParser(OpenAIUsageParser):
+    """Volcengine Ark Chat Completions token usage."""
+
+    name = "volcengine"
+
+
+class SiliconFlowUsageParser(OpenAIUsageParser):
+    """SiliconFlow usage with its additional prompt cache counters."""
+
+    name = "siliconflow"
+
+    def parse(self, response_data: Mapping[str, Any]) -> TokenUsage:
+        parsed = super().parse(response_data)
+        usage = response_data.get("usage")
+        if not isinstance(usage, Mapping):
+            return parsed
+        cached_tokens = parsed[1] or _first_int(usage, "prompt_cache_hit_tokens")
+        return parsed[0], cached_tokens, parsed[2], parsed[3], parsed[4]
+
+
+class OpenRouterUsageParser(OpenAIUsageParser):
+    """OpenRouter normalized usage, including cache and reasoning details."""
+
+    name = "openrouter"
+
+
+class LiteLLMUsageParser(OpenAIUsageParser):
+    """LiteLLM normalized Chat Completions and Responses token usage."""
+
+    name = "litellm"
+
+
+class OllamaUsageParser(OpenAIUsageParser):
+    """Ollama native metrics with OpenAI compatibility support."""
+
+    name = "ollama"
+
+    def parse(self, response_data: Mapping[str, Any]) -> TokenUsage:
+        parsed = super().parse(response_data)
+        input_tokens = _first_int(response_data, "prompt_eval_count")
+        output_tokens = _first_int(response_data, "eval_count")
+        if not input_tokens and not output_tokens:
+            return parsed
+        input_tokens = input_tokens or parsed[0]
+        output_tokens = output_tokens or parsed[2]
+        total_tokens = parsed[4] or input_tokens + output_tokens
+        return input_tokens, parsed[1], output_tokens, parsed[3], total_tokens
+
+
 class DashScopeUsageParser(TokenUsageParser):
     name = "dashscope"
 
@@ -160,22 +227,28 @@ DEFAULT_USAGE_PARSER = OpenAIUsageParser()
 DEEPSEEK_USAGE_PARSER = DeepSeekUsageParser()
 DASHSCOPE_USAGE_PARSER = DashScopeUsageParser()
 GEMINI_USAGE_PARSER = GeminiUsageParser()
+MINIMAX_USAGE_PARSER = MiniMaxUsageParser()
+MIMO_USAGE_PARSER = MiMoUsageParser()
+BIGMODEL_USAGE_PARSER = BigModelUsageParser()
+VOLCENGINE_USAGE_PARSER = VolcEngineUsageParser()
+SILICONFLOW_USAGE_PARSER = SiliconFlowUsageParser()
+OPENROUTER_USAGE_PARSER = OpenRouterUsageParser()
+LITELLM_USAGE_PARSER = LiteLLMUsageParser()
+OLLAMA_USAGE_PARSER = OllamaUsageParser()
 
 
 _PROVIDER_USAGE_PARSERS: dict[ProviderType, TokenUsageParser] = {
     "deepseek": DEEPSEEK_USAGE_PARSER,
     "aliyuncs": DASHSCOPE_USAGE_PARSER,
     "google": GEMINI_USAGE_PARSER,
-    # These providers currently expose the OpenAI usage schema. Keeping them
-    # explicit documents the protocol choice and lets each diverge later.
-    "minimax": DEFAULT_USAGE_PARSER,
-    "mimo": DEFAULT_USAGE_PARSER,
-    "bigmodel": DEFAULT_USAGE_PARSER,
-    "volces": DEFAULT_USAGE_PARSER,
-    "siliconflow": DEFAULT_USAGE_PARSER,
-    "openrouter": DEFAULT_USAGE_PARSER,
-    "litellm": DEFAULT_USAGE_PARSER,
-    "ollama": DEFAULT_USAGE_PARSER,
+    "minimax": MINIMAX_USAGE_PARSER,
+    "mimo": MIMO_USAGE_PARSER,
+    "bigmodel": BIGMODEL_USAGE_PARSER,
+    "volces": VOLCENGINE_USAGE_PARSER,
+    "siliconflow": SILICONFLOW_USAGE_PARSER,
+    "openrouter": OPENROUTER_USAGE_PARSER,
+    "litellm": LITELLM_USAGE_PARSER,
+    "ollama": OLLAMA_USAGE_PARSER,
     "default": DEFAULT_USAGE_PARSER,
 }
 

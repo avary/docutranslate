@@ -39,9 +39,10 @@ from docutranslate.agents.provider.token_counting import (
                     "completion_tokens": 30,
                     "total_tokens": 150,
                     "prompt_cache_hit_tokens": 80,
+                    "completion_tokens_details": {"reasoning_tokens": 12},
                 }
             },
-            (120, 80, 30, 0, 150),
+            (120, 80, 30, 12, 150),
         ),
         (
             "aliyuncs",
@@ -70,16 +71,30 @@ from docutranslate.agents.provider.token_counting import (
             (70, 30, 25, 15, 110),
         ),
         (
+            "aliyuncs",
+            {
+                "usage": {
+                    "prompt_tokens": 3019,
+                    "completion_tokens": 101,
+                    "total_tokens": 3120,
+                    "prompt_tokens_details": {"cached_tokens": 2048},
+                    "completion_tokens_details": {"reasoning_tokens": 40},
+                }
+            },
+            (3019, 2048, 101, 40, 3120),
+        ),
+        (
             "minimax",
             {
                 "usage": {
                     "prompt_tokens": 26,
                     "completion_tokens": 223,
                     "total_tokens": 249,
+                    "prompt_tokens_details": {"cached_tokens": 12},
                     "completion_tokens_details": {"reasoning_tokens": 214},
                 }
             },
-            (26, 0, 223, 214, 249),
+            (26, 12, 223, 214, 249),
         ),
         (
             "mimo",
@@ -106,12 +121,122 @@ from docutranslate.agents.provider.token_counting import (
             },
             (44, 22, 11, 5, 55),
         ),
+        (
+            "bigmodel",
+            {
+                "usage": {
+                    "prompt_tokens": 1200,
+                    "completion_tokens": 300,
+                    "total_tokens": 1500,
+                    "prompt_tokens_details": {"cached_tokens": 800},
+                    "completion_tokens_details": {"reasoning_tokens": 180},
+                }
+            },
+            (1200, 800, 300, 180, 1500),
+        ),
+        (
+            "litellm",
+            {
+                "usage": {
+                    "prompt_tokens": 13,
+                    "completion_tokens": 43,
+                    "total_tokens": 56,
+                    "prompt_tokens_details": {"cached_tokens": 8},
+                    "cache_read_input_tokens": 8,
+                }
+            },
+            (13, 8, 43, 0, 56),
+        ),
+        (
+            "volces",
+            {
+                "usage": {
+                    "prompt_tokens": 989,
+                    "completion_tokens": 601,
+                    "total_tokens": 1590,
+                    "prompt_tokens_details": {"cached_tokens": 400},
+                    "completion_tokens_details": {"reasoning_tokens": 250},
+                }
+            },
+            (989, 400, 601, 250, 1590),
+        ),
+        (
+            "siliconflow",
+            {
+                "usage": {
+                    "prompt_tokens": 15,
+                    "completion_tokens": 1540,
+                    "total_tokens": 1555,
+                    "completion_tokens_details": {"reasoning_tokens": 1190},
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                    "prompt_cache_hit_tokens": 9,
+                    "prompt_cache_miss_tokens": 6,
+                }
+            },
+            (15, 9, 1540, 1190, 1555),
+        ),
+        (
+            "openrouter",
+            {
+                "usage": {
+                    "prompt_tokens": 10339,
+                    "completion_tokens": 60,
+                    "total_tokens": 10399,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 10318,
+                        "cache_write_tokens": 0,
+                    },
+                    "completion_tokens_details": {"reasoning_tokens": 30},
+                }
+            },
+            (10339, 10318, 60, 30, 10399),
+        ),
+        (
+            "ollama",
+            {
+                "prompt_eval_count": 11,
+                "eval_count": 18,
+            },
+            (11, 0, 18, 0, 29),
+        ),
+        (
+            "ollama",
+            {
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 18,
+                    "total_tokens": 29,
+                }
+            },
+            (11, 0, 18, 0, 29),
+        ),
     ],
 )
 def test_provider_usage_parsers(provider, response, expected):
     parser = get_provider_token_usage_parser(provider)
 
     assert parser.parse(response) == expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "parser_name"),
+    [
+        ("default", "openai"),
+        ("deepseek", "deepseek"),
+        ("aliyuncs", "dashscope"),
+        ("google", "gemini"),
+        ("minimax", "minimax"),
+        ("mimo", "mimo"),
+        ("bigmodel", "bigmodel"),
+        ("volces", "volcengine"),
+        ("siliconflow", "siliconflow"),
+        ("openrouter", "openrouter"),
+        ("litellm", "litellm"),
+        ("ollama", "ollama"),
+    ],
+)
+def test_every_provider_has_an_explicit_usage_parser(provider, parser_name):
+    assert get_provider_token_usage_parser(provider).name == parser_name
 
 
 def test_provider_parser_falls_back_to_default_openai_shape():
