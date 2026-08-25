@@ -16,8 +16,15 @@ from urllib.parse import urlparse
 
 import httpx
 
-from docutranslate.agents.provider import get_provider_by_domain
-from docutranslate.agents.thinking.thinking_factory import get_thinking_mode, ProviderType
+from docutranslate.agents.provider import ProviderType, get_provider_by_domain
+from docutranslate.agents.provider.token_counting import (
+    ProviderTokenUsageParser,
+    get_provider_token_usage_parser,
+)
+from docutranslate.agents.thinking.controller import (
+    ReasoningController,
+    parse_extra_body,
+)
 from docutranslate.config import LLM_STREAMING, NON_STREAM_TIMEOUT, STREAM_IDLE_TIMEOUT
 from docutranslate.logger import global_logger
 from docutranslate.utils.utils import get_httpx_proxies
@@ -79,6 +86,7 @@ class _StreamingResponseAccumulator:
         self._content: list[str] = []
         self._finish_reason = None
         self._usage: dict | None = None
+        self._usage_key = "usage"
         self._saw_payload = False
         self.done = False
 
@@ -130,9 +138,12 @@ class _StreamingResponseAccumulator:
             raise ValueError(f"流式响应返回错误: {data['error']}")
 
         self._saw_payload = True
-        usage = data.get("usage")
-        if isinstance(usage, dict):
-            self._usage = usage
+        for usage_key in ("usage", "usageMetadata", "usage_metadata"):
+            usage = data.get(usage_key)
+            if isinstance(usage, dict):
+                self._usage = usage
+                self._usage_key = usage_key
+                break
 
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -173,7 +184,7 @@ class _StreamingResponseAccumulator:
                 }]
             }
             if self._usage is not None:
-                result["usage"] = self._usage
+                result[self._usage_key] = self._usage
             return result
 
         # 有些兼容服务会忽略 stream=true，直接返回普通 JSON。
@@ -345,55 +356,13 @@ class RateLimiter:
             time.sleep(wait_time + 0.1)
 
 
-def extract_token_info(response_data: dict) -> tuple[int, int, int, int, int]:
-    """从API响应中提取token信息
-    返回: (input_tokens, cached_tokens, output_tokens, reasoning_tokens, total_tokens)
-    """
-    if "usage" not in response_data:
-        return 0, 0, 0, 0, 0
-
-    usage = response_data["usage"]
-    # print(usage)
-    input_tokens = usage.get("prompt_tokens", 0)
-    output_tokens = usage.get("completion_tokens", 0)
-    total_tokens = usage.get("total_tokens", 0)
-
-    cached_tokens = 0
-    reasoning_tokens = 0
-    try:
-        # 尝试多种可能的 cached_tokens 字段位置
-        if (
-                "input_tokens_details" in usage
-                and "cached_tokens" in usage["input_tokens_details"]
-        ):
-            cached_tokens = usage["input_tokens_details"]["cached_tokens"]
-        elif (
-                "prompt_tokens_details" in usage
-                and "cached_tokens" in usage["prompt_tokens_details"]
-        ):
-            cached_tokens = usage["prompt_tokens_details"]["cached_tokens"]
-        elif "prompt_cache_hit_tokens" in usage:
-            cached_tokens = usage["prompt_cache_hit_tokens"]
-
-        # 尝试多种可能的 reasoning_tokens 字段位置
-        if (
-                "output_tokens_details" in usage
-                and "reasoning_tokens" in usage["output_tokens_details"]
-        ):
-            reasoning_tokens = usage["output_tokens_details"]["reasoning_tokens"]
-        elif (
-                "completion_tokens_details" in usage
-                and "reasoning_tokens" in usage["completion_tokens_details"]
-        ):
-            reasoning_tokens = usage["completion_tokens_details"]["reasoning_tokens"]
-        else:
-            # Gemini特殊处理: 如果total_tokens大于prompt+completion，差额很可能是思考token
-            if total_tokens > 0 and (input_tokens + output_tokens) > 0 and total_tokens > (input_tokens + output_tokens):
-                reasoning_tokens = total_tokens - (input_tokens + output_tokens)
-
-        return input_tokens, cached_tokens, output_tokens, reasoning_tokens, total_tokens
-    except (TypeError, KeyError, AttributeError):
-        return -1, -1, -1, -1, -1
+def extract_token_info(
+    response_data: dict,
+    provider: ProviderType | str = "default",
+    model_id: str = "",
+) -> tuple[int, int, int, int, int]:
+    """兼容入口：按 Provider 提取服务端返回的 Token 使用量。"""
+    return get_provider_token_usage_parser(provider).parse(response_data)
 
 
 class TokenCounter:
@@ -448,17 +417,11 @@ PreSendHandlerType = Callable[[str, str], tuple[str, str]]
 ResultHandlerType = Callable[[str, str, logging.Logger], Any]
 ErrorResultHandlerType = Callable[[str, logging.Logger], Any]
 
-# _CJK_PATTERN = re.compile(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]')
-# 扩展正则范围，包含：
-# CJK (中日韩): \u2e80-\u9fff
-# 西里尔 (俄语等): \u0400-\u04ff
-# 阿拉伯语: \u0600-\u06ff
-# 泰语: \u0e00-\u0e7f
-# 梵文 (印地语等): \u0900-\u097f
-# 标点和特殊符号范围较广，这里主要抓取非拉丁体系的主要语言
+
 _COMPLEX_SCRIPT_PATTERN = re.compile(
     r'[\u2e80-\u9fff\u0400-\u04ff\u0600-\u06ff\u0e00-\u0e7f\u0900-\u097f]'
 )
+
 
 class Agent:
 
@@ -510,9 +473,40 @@ class Agent:
         self.rate_limiter = RateLimiter(rpm=config.rpm, tpm=config.tpm)
 
         self.provider = config.provider if config.provider is not None else get_provider_by_domain(self.domain)
+        self.token_usage_parser: ProviderTokenUsageParser = (
+            get_provider_token_usage_parser(self.provider)
+        )
         self.extra_body = config.extra_body
+        parsed_extra_body = parse_extra_body(config.extra_body)
+        self._extra_body_data = parsed_extra_body or {}
+        self._extra_body_invalid = parsed_extra_body is None
+        self.reasoning_controller = ReasoningController(
+            provider=self.provider,
+            model_id=self.model_id,
+            base_url=self.baseurl,
+            intent=self.thinking,
+            user_extra_body=self._extra_body_data,
+        )
 
     async def _request_completion_async(
+            self,
+            client: httpx.AsyncClient,
+            data: dict,
+            headers: dict,
+    ) -> dict:
+        try:
+            return await self._request_completion_async_once(client, data, headers)
+        except httpx.HTTPStatusError as error:
+            fallback = self.reasoning_controller.fallback_request(data, error)
+            if fallback is None:
+                raise
+            fallback_data, warning = fallback
+            self.logger.warning(warning)
+            return await self._request_completion_async_once(
+                client, fallback_data, headers
+            )
+
+    async def _request_completion_async_once(
             self,
             client: httpx.AsyncClient,
             data: dict,
@@ -560,6 +554,10 @@ class Agent:
                     accumulator.feed(chunk)
                 return accumulator.finish(bytes(raw_body))
         except httpx.HTTPStatusError as stream_error:
+            if self.reasoning_controller.is_parameter_compatibility_error(
+                stream_error, data
+            ):
+                raise
             # 仅对常见的“不支持 stream 参数/端点”状态进行一次非流式兼容尝试。
             if stream_error.response.status_code not in {400, 404, 405, 415, 422, 501}:
                 raise
@@ -597,6 +595,22 @@ class Agent:
         return _parse_response_json(response)
 
     def _request_completion_sync(
+            self,
+            client: httpx.Client,
+            data: dict,
+            headers: dict,
+    ) -> dict:
+        try:
+            return self._request_completion_sync_once(client, data, headers)
+        except httpx.HTTPStatusError as error:
+            fallback = self.reasoning_controller.fallback_request(data, error)
+            if fallback is None:
+                raise
+            fallback_data, warning = fallback
+            self.logger.warning(warning)
+            return self._request_completion_sync_once(client, fallback_data, headers)
+
+    def _request_completion_sync_once(
             self,
             client: httpx.Client,
             data: dict,
@@ -641,6 +655,10 @@ class Agent:
                         break
                 return accumulator.finish(bytes(raw_body))
         except httpx.HTTPStatusError as stream_error:
+            if self.reasoning_controller.is_parameter_compatibility_error(
+                stream_error, data
+            ):
+                raise
             if stream_error.response.status_code not in {400, 404, 405, 415, 422, 501}:
                 raise
             self.logger.warning(
@@ -659,28 +677,12 @@ class Agent:
             return result
 
     def _estimate_tokens(self, text: str) -> int:
-        """
-        改进的纯 Python 估算，适配更多语言。
-        """
+        """保留原有的发送前 TPM 估算方式。"""
         if not text:
             return 0
-
-        total_len = len(text)
-
-        # 统计复杂字符数量 (CJK, 俄语, 阿拉伯语等)
         complex_char_count = len(_COMPLEX_SCRIPT_PATTERN.findall(text))
-
-        # 简单的 ASCII 或拉丁字符
-        simple_char_count = total_len - complex_char_count
-
-        # 权重设定：
-        # 复杂字符：保守估计 1.0 (GPT-4o 对中文优化很好，约为0.6-0.7，但为了限流安全，建议设高一点)
-        # 简单字符：0.3 (英文平均 1个token ≈ 3.5字符)
-        # 额外：加上消息的固定开销 (Message Overhead)，通常每条消息有 3-4 个 token 的系统开销
-
+        simple_char_count = len(text) - complex_char_count
         estimated = (complex_char_count * 1.0) + (simple_char_count * 0.3)
-
-        # 向上取整
         return int(estimated) + 1
 
     def _sanitize_result(self, text: str) -> str:
@@ -713,26 +715,10 @@ class Agent:
         return accumulated_result + additional_result
 
     def _add_thinking_mode(self, data: dict):
-        thinking_mode_result = get_thinking_mode(self.provider, data.get("model"))
-        if thinking_mode_result is None:
-            return
-        field_thinking, val_enable, val_disable = thinking_mode_result
-
-        # 获取要设置的值
-        if self.thinking == "enable":
-            value = val_enable
-        elif self.thinking == "disable":
-            value = val_disable
-        else:
-            return
-
-        # 特殊处理 extra_body 类型：不是设置 data["extra_body"]，而是直接合并到 data 中
-        if field_thinking == "extra_body":
-            if isinstance(value, dict):
-                data.update(value)
-        else:
-            # 普通字段直接设置
-            data[field_thinking] = value
+        """Apply semantic thinking intent through the provider/model adapter."""
+        warning = self.reasoning_controller.apply(data)
+        if warning:
+            self.logger.warning(warning)
 
     def _prepare_request_data(
             self, prompt: str, system_prompt: str, temperature=None, top_p=None, json_format=False
@@ -755,18 +741,15 @@ class Agent:
             "top_p": top_p,
         }
 
-        # 先应用思考模式
-        if self.thinking != "default":
-            self._add_thinking_mode(data)
+        # 先应用平台适配。default 通常不发送控制字段，但适配器可以加入
+        # reasoning_split 这类仅影响响应形态、不改变模型思考行为的参数。
+        self._add_thinking_mode(data)
 
         # 再应用用户的 extra_body（用户配置优先，可以覆盖思考模式）
         if self.extra_body and self.extra_body.strip():
-            try:
-                import json
-                extra = json.loads(self.extra_body)
-                if isinstance(extra, dict):
-                    data.update(extra)
-            except (json.JSONDecodeError, ValueError):
+            if not self._extra_body_invalid:
+                data.update(self._extra_body_data)
+            else:
                 self.logger.warning(f"Failed to parse extra_body JSON: {self.extra_body}")
 
         if json_format:
@@ -835,7 +818,7 @@ class Agent:
             additional_result = message.get("content", "")
 
             input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens = (
-                extract_token_info(response_data)
+                self.token_usage_parser.parse(response_data)
             )
             self.token_counter.add(input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens)
 
@@ -978,7 +961,7 @@ class Agent:
                 self.logger.warning(f"未知的 finish_reason: '{finish_reason}'，返回已获取内容")
 
             input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens = (
-                extract_token_info(response_data)
+                self.token_usage_parser.parse(response_data)
             )
 
             self.token_counter.add(
@@ -1302,7 +1285,7 @@ class Agent:
             additional_result = message.get("content", "")
 
             input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens = (
-                extract_token_info(response_data)
+                self.token_usage_parser.parse(response_data)
             )
             self.token_counter.add(input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens)
 
@@ -1439,7 +1422,7 @@ class Agent:
                 self.logger.warning(f"未知的 finish_reason: '{finish_reason}'，返回已获取内容")
 
             input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens = (
-                extract_token_info(response_data)
+                self.token_usage_parser.parse(response_data)
             )
 
             self.token_counter.add(

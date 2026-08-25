@@ -262,7 +262,7 @@ print(f"Exported content length: {len(base64_content)}")
 | **rpm** | `int` | - | Requests per minute limit |
 | **tpm** | `int` | - | Tokens per minute limit |
 | **extra_body** | `str` | - | Additional request body parameters in JSON string format, will be merged into API request |
-| **thinking** | `str` | `"auto"` | Thinking mode: `"auto"`, `"none"`, `"block"` |
+| **thinking** | `str` | `"disable"` | Thinking mode: `"default"` (provider default), `"enable"`, `"disable"` |
 | **custom_prompt** | `str` | - | Custom prompt for translation |
 | **system_proxy_enable** | `bool` | `False` | Enable system proxy |
 | **insert_mode** | `str` | `"replace"` | Docx/Xlsx/Txt insertion mode: `"replace"`, `"append"`, `"prepend"` |

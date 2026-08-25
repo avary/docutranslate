@@ -24,6 +24,7 @@ from docutranslate.agents.segments_agent import (
     generate_prompt as generate_segments_prompt,
 )
 from docutranslate.core.schemas import (
+    BaseWorkflowParams,
     DocxWorkflowParams,
     TranslatePayload,
     XlsxWorkflowParams,
@@ -65,6 +66,13 @@ STREAM_POLICY_FIELDS = {
     "stream_idle_timeout",
     "non_stream_timeout",
 }
+
+
+@pytest.mark.parametrize("provider", ["mimo", "litellm"])
+def test_new_providers_are_accepted_by_public_workflow_schema(provider):
+    params = BaseWorkflowParams(skip_translate=True, provider=provider)
+
+    assert params.provider == provider
 
 
 def test_sdk_sync_and_async_signatures_inherit_workflow_defaults():

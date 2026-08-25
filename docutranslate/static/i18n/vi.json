@@ -94,7 +94,7 @@
   "targetLanguageCustom": "Khác (Tùy chỉnh)",
   "customLangPlaceholder": "Vui lòng nhập ngôn ngữ đích, ví dụ: Vietnamese",
   "thinkingModeLabel": "Chế độ tư duy (Thinking Mode)",
-  "thinkingModeTooltip": "Thiết lập xem mô hình suy luận hỗn hợp có thực hiện tư duy hay không. Hiện được hỗ trợ bởi dòng glm4.5 của Zhipu, dòng seed1.6 của Volcengine, SiliconFlow, dòng Gemini của Google và 302AI (một phần). Khuyên dùng tùy chọn 'Tắt'.",
+  "thinkingModeTooltip": "Chọn có bật suy luận cho mô hình hay không. Tham số tương thích được chọn theo nhà cung cấp và mô hình; các mô hình bắt buộc suy luận hoặc không hỗ trợ cấu hình sẽ dùng hành vi mặc định một cách an toàn.",
   "thinkingModeEnable": "Bật",
   "thinkingModeDisable": "Tắt (Khuyên dùng)",
   "thinkingModeDefault": "Mặc định",

@@ -94,7 +94,7 @@
   "targetLanguageCustom": "Other (Custom)",
   "customLangPlaceholder": "Please enter the target language, e.g., Italian",
   "thinkingModeLabel": "Thinking Mode",
-  "thinkingModeTooltip": "Set whether the mixed-inference model should think. Currently supported by Zhipu's glm4.5 series, Volcengine's seed1.6 series, SiliconFlow, Google's Gemini series, and 302AI (partial). Disabling is recommended.",
+  "thinkingModeTooltip": "Choose whether the model should reason. Compatible parameters are selected per provider and model; mandatory or unsupported reasoning safely uses the model default.",
   "thinkingModeEnable": "Enable",
   "thinkingModeDisable": "Disable (Recommended)",
   "thinkingModeDefault": "Default",

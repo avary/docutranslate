@@ -1,58 +1,35 @@
-from typing import TypeAlias, Literal, Any
+"""Backward-compatible facade for the former tuple-based thinking mapping.
+
+New request construction uses :class:`ReasoningController`. This module remains
+available for integrations that imported ``get_thinking_mode`` directly.
+"""
+
+from typing import Any, TypeAlias
 
 from docutranslate.agents.provider import ProviderType
 
-ModeType: TypeAlias = Literal["ollama", "bigmodel", "aliyuncs", "volces", "google", "siliconflow", "deepseek", "default"]
-ThinkingField: TypeAlias = str
-EnableValueType: TypeAlias = str | dict[str, Any] | bool
-DisableValueType: TypeAlias = str | dict[str, Any] | bool
-ThinkingConfig: TypeAlias = tuple[ThinkingField, EnableValueType, DisableValueType] | None
+from docutranslate.agents.provider.registry import get_reasoning_adapter
 
-thinking_mode: dict[ProviderType, ThinkingConfig] = {
-    "minimax": ("reasoning_effort", "medium", "none"),
-    "ollama": ("reasoning_effort", "medium", "none"),
-    "bigmodel": ("thinking", {"type": "enabled"}, {"type": "disabled"}),
-    "aliyuncs": (
-        "enable_thinking", True, False,
-    ),
-    "volces": (
-        "thinking",
-        {"type": "enabled"},
-        {"type": "disabled"},
-    ),
-    "google": ("reasoning_effort", "medium", "none"),
-    "siliconflow": ("enable_thinking", True, False),
-    "deepseek": ("thinking", {"type": "enabled"}, {"type": "disabled"}),
-    "default": ("reasoning_effort", "medium", "none"),
-}
+ThinkingField: TypeAlias = str
+ThinkingValue: TypeAlias = str | dict[str, Any] | bool
+ThinkingConfig: TypeAlias = tuple[ThinkingField, ThinkingValue, ThinkingValue] | None
 
 
 def get_thinking_mode_by_model_id(model_id: str) -> ThinkingConfig:
-    model_id = model_id.strip().lower()
-    if "glm" in model_id:
-        return thinking_mode["bigmodel"]
-    elif "qwen" in model_id:
-        return thinking_mode["aliyuncs"]
-    elif "seed" in model_id:
-        return thinking_mode["volces"]
-    elif "gemini" in model_id:
-        return thinking_mode["google"]
-    return thinking_mode["default"]
+    # A model name does not identify the gateway's wire protocol. Do not guess a
+    # vendor-specific field from names such as qwen/glm/gemini.
+    return get_thinking_mode("default", model_id)
 
 
 def get_thinking_mode(provider: ProviderType, model_id: str) -> ThinkingConfig:
-    if provider == "bigmodel":
-        return thinking_mode["bigmodel"]
-    elif provider == "aliyuncs":
-        return thinking_mode["aliyuncs"]
-    elif provider == "volces":
-        return thinking_mode["volces"]
-    elif provider == "google":
-        return thinking_mode["google"]
-    elif provider == "siliconflow":
-        return thinking_mode["siliconflow"]
-    elif provider == "ollama":
-        return thinking_mode["ollama"]
-    elif provider == "deepseek":
-        return thinking_mode["deepseek"]
-    return get_thinking_mode_by_model_id(model_id)
+    adapter = get_reasoning_adapter(provider)
+    enabled = adapter.decide(model_id, "enable").updates
+    disabled = adapter.decide(model_id, "disable").updates
+    for field in enabled.keys() & disabled.keys():
+        enable_value = enabled[field]
+        disable_value = disabled[field]
+        if isinstance(enable_value, (str, dict, bool)) and isinstance(
+            disable_value, (str, dict, bool)
+        ):
+            return field, enable_value, disable_value
+    return None

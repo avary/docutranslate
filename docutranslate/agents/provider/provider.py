@@ -1,18 +1,50 @@
-from typing import TypeAlias, Literal
+from typing import Literal, TypeAlias
 
-ProviderType: TypeAlias = Literal["minimax", "ollama", "bigmodel", "aliyuncs", "volces", "google", "siliconflow", "deepseek", "default"]
+ProviderType: TypeAlias = Literal[
+    "minimax",
+    "ollama",
+    "bigmodel",
+    "aliyuncs",
+    "volces",
+    "google",
+    "siliconflow",
+    "deepseek",
+    "openrouter",
+    "mimo",
+    "litellm",
+    "default",
+]
 
-def get_provider_by_domain(domain:str)->ProviderType:
-    if domain == "open.bigmodel.cn":
+
+def get_provider_by_domain(domain: str) -> ProviderType:
+    """Resolve well-known OpenAI-compatible endpoints without inspecting model IDs."""
+    domain = domain.strip().lower()
+    hostname = domain.split(":", 1)[0]
+
+    if hostname == "open.bigmodel.cn":
         return "bigmodel"
-    elif domain == "dashscope.aliyuncs.com":
+    elif hostname == "dashscope.aliyuncs.com" or hostname.startswith("dashscope-"):
         return "aliyuncs"
-    elif domain == "ark.cn-beijing.volces.com":
+    elif hostname.endswith(".maas.aliyuncs.com"):
+        return "aliyuncs"
+    elif hostname.startswith("ark.") and hostname.endswith(".volces.com"):
         return "volces"
-    elif domain == "generativelanguage.googleapis.com":
+    elif hostname == "generativelanguage.googleapis.com":
         return "google"
-    elif domain == "api.siliconflow.cn":
+    elif hostname in {"api.siliconflow.cn", "api.siliconflow.com"}:
         return "siliconflow"
-    elif domain == "api.deepseek.com":
+    elif hostname == "api.deepseek.com":
         return "deepseek"
+    elif hostname == "api.minimaxi.com":
+        return "minimax"
+    elif hostname == "openrouter.ai":
+        return "openrouter"
+    elif hostname == "api.xiaomimimo.com":
+        return "mimo"
+    elif hostname.startswith("token-plan-") and hostname.endswith(".xiaomimimo.com"):
+        return "mimo"
+    elif hostname == "litellm" or hostname.startswith("litellm."):
+        return "litellm"
+    elif domain.endswith(":11434"):
+        return "ollama"
     return "default"

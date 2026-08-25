@@ -94,7 +94,7 @@
   "targetLanguageCustom": "其它 (自定义)",
   "customLangPlaceholder": "请输入目标语言, 例如: Italian",
   "thinkingModeLabel": "思考模式",
-  "thinkingModeTooltip": "设置混合推理模型是否进行思考，目前支持智谱的glm4.5系列、火山引擎的seed1.6系列、硅基流动平台、google的gemini系列、302AI(部分)，建议选择禁用思考",
+  "thinkingModeTooltip": "选择模型是否启用思考。系统会按供应商和模型选择兼容参数；对于强制思考或不支持配置的模型，将安全地使用模型默认行为。",
   "thinkingModeEnable": "启用",
   "thinkingModeDisable": "禁用(推荐)",
   "thinkingModeDefault": "默认",

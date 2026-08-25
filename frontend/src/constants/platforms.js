@@ -10,6 +10,7 @@ export const KNOWN_PLATFORMS = [
         provider: "google"
     },
     {val: "https://api.deepseek.com/v1", label: "DeepSeek", provider: "deepseek"},
+    {val: "https://api.xiaomimimo.com/v1", label: "MiMo", provider: "mimo"},
     {
         val: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         label: "阿里云百炼(DashScope)",
@@ -25,12 +26,13 @@ export const KNOWN_PLATFORMS = [
     {val: "https://www.dmxapi.cn/v1", label: "DMXAPI_CN", provider: ""},
     {val: "https://www.dmxapi.com/v1", label: "DMXAPI_GLOBAL", provider: ""},
     {val: "https://ai.juguang.chat/v1", label: "聚光AI(juguang CN)", provider: ""},
-    {val: "https://openrouter.ai/api/v1", label: "OpenRouter", provider: ""},
+    {val: "https://openrouter.ai/api/v1", label: "OpenRouter", provider: "openrouter"},
+    {val: "http://127.0.0.1:4000/v1", label: "LiteLLM", provider: "litellm"},
     {val: "http://127.0.0.1:1234/v1", label: "LM Studio", provider: ""},
     {val: "http://127.0.0.1:11434/v1", label: "Ollama", provider: "ollama"}
 ];
 
-export const PROVIDERS = ['default', 'google', 'minimax', 'ollama', 'aliyuncs', 'volces', 'siliconflow', 'bigmodel', 'deepseek'];
+export const PROVIDERS = ['default', 'google', 'minimax', 'ollama', 'aliyuncs', 'volces', 'siliconflow', 'bigmodel', 'deepseek', 'openrouter', 'mimo', 'litellm'];
 
 export const API_HREF_MAP = {
     "https://api.302.ai/v1": ["https://dash.302.ai/settings", ""],
@@ -38,6 +40,7 @@ export const API_HREF_MAP = {
     "https://api.openai.com/v1": ["https://platform.openai.com/api-keys", ""],
     "https://generativelanguage.googleapis.com/v1beta/openai/": ["https://aistudio.google.com/app/apikey", ""],
     "https://api.deepseek.com/v1": ["https://platform.deepseek.com/api_keys", ""],
+    "https://api.xiaomimimo.com/v1": ["https://platform.xiaomimimo.com/", ""],
     "https://dashscope.aliyuncs.com/compatible-mode/v1": ["https://dashscope.console.aliyun.com/apiKey", ""],
     "https://ark.cn-beijing.volces.com/api/v3": ["https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", ""],
     "https://api.siliconflow.cn/v1": ["https://cloud.siliconflow.cn/account/ak", ""],
