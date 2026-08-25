@@ -1198,19 +1198,44 @@ class Agent:
                         self.progress_callback(count, total)
                     return result
 
-            for prompt_index, p_text in enumerate(prompts, start=1):
-                task = asyncio.create_task(send_with_semaphore(p_text, prompt_index))
+            results: list[Any] = [None] * total
+
+            async def send_and_store(p_text: str, prompt_index: int):
+                results[prompt_index - 1] = await send_with_semaphore(
+                    p_text, prompt_index
+                )
+
+            # DeepSeek 的自动上下文缓存需要先观察到不同请求间的共同前缀。
+            # 三个及以上分片时顺序完成前两个请求，再并发发送余下分片，
+            # 让后续请求更可能复用刚持久化的稳定 prompt 前缀。
+            warmup_count = 2 if self.provider == "deepseek" and total >= 3 else 0
+            if warmup_count:
+                self.logger.info("DeepSeek缓存预热: 顺序处理前2个分片")
+                for prompt_index in range(1, warmup_count + 1):
+                    await send_and_store(prompts[prompt_index - 1], prompt_index)
+
+            for prompt_index, p_text in enumerate(
+                    prompts[warmup_count:], start=warmup_count + 1
+            ):
+                task = asyncio.create_task(send_and_store(p_text, prompt_index))
                 tasks.append(task)
 
-            results = await asyncio.gather(*tasks, return_exceptions=False)
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=False)
 
             self.logger.info(
                 f"所有请求处理完毕。未解决的错误总数: {self.unresolved_error_count}"
             )
 
             token_stats = self.token_counter.get_stats()
+            cache_hit_rate = (
+                token_stats["cached_tokens"] / token_stats["input_tokens"]
+                if token_stats["input_tokens"] > 0
+                else 0.0
+            )
             self.logger.info(
-                f"Token使用统计 - 输入: {token_stats['input_tokens'] / 1000:.2f}K(含cached: {token_stats['cached_tokens'] / 1000:.2f}K), "
+                f"Token使用统计 - 输入: {token_stats['input_tokens'] / 1000:.2f}K(含cached: {token_stats['cached_tokens'] / 1000:.2f}K, "
+                f"命中率: {cache_hit_rate:.1%}), "
                 f"输出: {token_stats['output_tokens'] / 1000:.2f}K(含reasoning: {token_stats['reasoning_tokens'] / 1000:.2f}K), "
                 f"总计: {token_stats['total_tokens'] / 1000:.2f}K"
             )

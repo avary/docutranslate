@@ -16,21 +16,27 @@ def get_original_markdown(prompt: str):
 
 
 def generate_prompt(markdown_text: str, to_lang: str):
-    return f"""
-Treat the text input as markdown text and translate it into {to_lang},output translation ONLY.
-- NO explanations. NO notes.
-- For special tags or other non-translatable elements (like codes, brand names, specific jargon), keep them in their original form.
-- All formulas, regardless of length, must be represented as valid, parsable LaTeX. They must be correctly enclosed by `$`, `\\(\\)`, or `$$`. If a formula is not formatted correctly, you must fix it.
-- Remove or correct any obviously abnormal characters, but without altering the original meaning.
-- When citing references, strictly preserve the original text; do not translate them. Examples of reference formats are as follows:
-  [1] Author A, Author B. "Original Title". Journal, 2023.
-  [2] 作者C. 《中文标题》. 期刊, 2022.
-- Output the translated markdown text as plain text (not in a markdown code block, with no extraneous text).
-
-The markdown text input:
+    """Build the dynamic suffix; reusable translation rules live in the system prompt."""
+    return f"""Translate the following markdown input into {to_lang}:
 <input>
- {markdown_text}
+{markdown_text}
 </input>
+"""
+
+
+def _build_system_prompt(to_lang: str) -> str:
+    return f"""# Role
+You are a professional machine translation engine.
+
+# Task
+Treat each input as markdown and translate it into {to_lang}.
+
+# Requirements
+- Output the translated markdown only. Do not add explanations or notes and do not wrap the result in a markdown code block.
+- Preserve special tags and non-translatable elements such as code, brand names, and technical terms.
+- Represent every formula as valid, parsable LaTeX enclosed by `$`, `\\(\\)`, or `$$`; correct malformed formula delimiters when necessary.
+- Remove or correct obviously abnormal characters without changing the original meaning.
+- Preserve citation text exactly and do not translate it. Examples include `[1] Author A, Author B. "Original Title". Journal, 2023.` and `[2] 作者C. 《中文标题》. 期刊, 2022.`
 """
 
 
@@ -45,10 +51,7 @@ class MDTranslateAgent(Agent):
     def __init__(self, config: MDTranslateAgentConfig):
         super().__init__(config)
         self.to_lang = config.to_lang
-        self.system_prompt = f"""
-# Role
-You are a professional machine translation engine.
-"""
+        self.system_prompt = _build_system_prompt(self.to_lang)
         self.custom_prompt = config.custom_prompt
         if config.custom_prompt:
             self.system_prompt += "\n# **Important rules or background** \n" + self.custom_prompt + '\nEND\n'
@@ -57,7 +60,9 @@ You are a professional machine translation engine.
     def _pre_send_handler(self, system_prompt, prompt):
         if self.glossary_dict:
             glossary = Glossary(glossary_dict=self.glossary_dict)
-            system_prompt += glossary.append_system_prompt(prompt)
+            incremental_glossary = glossary.build_incremental_prompt(prompt)
+            if incremental_glossary:
+                prompt = incremental_glossary + "\n" + prompt
         return system_prompt, prompt
 
     def send_chunks(self, prompts: list[str]):

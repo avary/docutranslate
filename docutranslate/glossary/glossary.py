@@ -20,21 +20,35 @@ class Glossary:
             if src.strip().lower() not in self.glossary_dict:
                 self.glossary_dict[src.strip().lower()] = dst
 
-    def append_system_prompt(self, text: str):
-        flag = False
-        prompt = """
-        Please refer to the glossary for the translation of terms that appear in the glossary.
-        Here is the reference glossary:
-        """
-        for src, dst in self.glossary_dict.items():
-            if src.lower() in text.lower():
-                prompt += f"{src}=>{dst}\n"
-                flag = True
-        prompt += "Glossary ends\n"
-        if flag:
-            return prompt
-        else:
+    def build_incremental_prompt(self, text: str) -> str:
+        """Build a deterministic glossary containing only terms used by this input."""
+        text_casefold = text.casefold()
+        matched_entries = sorted(
+            (
+                (src, dst)
+                for src, dst in self.glossary_dict.items()
+                if src and src.casefold() in text_casefold
+            ),
+            key=lambda item: (item[0].casefold(), item[0]),
+        )
+        if not matched_entries:
             return ""
+
+        glossary_lines = "\n".join(
+            f"{src}=>{dst}" for src, dst in matched_entries
+        )
+        return (
+            "<incremental_glossary>\n"
+            "Use the following glossary entries only when the corresponding source "
+            "term appears in this input:\n"
+            f"{glossary_lines}\n"
+            "Glossary ends\n"
+            "</incremental_glossary>\n"
+        )
+
+    def append_system_prompt(self, text: str):
+        """Compatibility alias for callers using the previous method name."""
+        return self.build_incremental_prompt(text)
 
     @staticmethod
     def glossary_dict2csv(glossary_dict: dict[str, str], delimiter=",", stem="glossary_gen") -> Document:

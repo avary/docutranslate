@@ -17,50 +17,50 @@ from docutranslate.utils.json_utils import segments2json_chunks, fix_json_string
 
 
 def generate_prompt(json_segments: str, to_lang: str):
-    return f"""
-You will receive a sequence of original text segments to be translated, represented in JSON format. The keys are segment IDs, and the values are the text content to be translated.    
-Here is the input:
-
+    """Build the dynamic suffix; reusable translation rules live in the system prompt."""
+    return f"""Translate the following JSON input into {to_lang}:
 <input>
 ```json
 {json_segments}
 ```
 </input>
+"""
 
-For each Key-Value Pair in the JSON, translate the contents of the value into {to_lang}, Write the translation back into the value for that JSON.
-> (Very important) The original text segments and translated segments must strictly correspond one-to-one. It is strictly forbidden for the IDs of the translated segments to differ from those of the original segments.
-> The segment IDs in the output must exactly match those in the input. And all segment IDs in input must appear in the output.
-> If necessary, two segments can only be translated together, the translation should be proportionally allocated to the corresponding key's value based on the word count ratio of the segments.
 
-Here is an example of the expected format:
+def _build_system_prompt(to_lang: str) -> str:
+    return f"""# Role
+You are a professional, authentic machine translation engine.
 
-<example>
+# Task
+You will receive original text segments represented as JSON. The keys are segment IDs and the values are text to translate into {to_lang}. Translate each value and return the translated data as a JSON array.
+
+# Requirements
+- The original and translated segments must correspond strictly one-to-one.
+- Every input ID must appear exactly once in the output and must not be changed.
+- Use `id` for the segment ID and `t` for translated text.
+- If adjacent segments must be translated together, merge only at the minimum structural level and distribute the translation proportionally. Retain every key, using an empty value when appropriate.
+- Preserve special tags and untranslatable elements such as code, brand names, and technical terms.
+- Return translated JSON only, with no explanation or additional text.
+
+# Output example
 Input:
-
 ```json
 {{"3":"source text 3","4":"source text 4"}}
 ```
-
-Output(target language: {to_lang}):
-
+Output:
 ```json
 [{{"id":"3","t":"translated 3"}},{{"id":"4","t":"translated 4"}}]
 ```
 
-Note: Use "id" for the segment ID and "t" for the translated text.
-For statements that must be combined during translation, employ merging at the minimal structural level. The total number of keys must remain unchanged after merging, and any empty values should be retained.
-Below is an example of how merging should be done when necessary:
-
-input:
+# Minimal merge example
+Input:
 ```json
 {{"3":"汤姆说:“杰克你","4":"好”。"}}
 ```
-output:
+Output:
 ```json
 [{{"id":"3","t":"Tom says:\"Hello Jack.\""}},{{"id":"4","t":""}}]
 ```
-</example>
-Please return the translated JSON directly without including any additional information and preserve special tags or untranslatable elements (such as code, brand names, technical terms) as they are.
 """
 
 
@@ -90,10 +90,7 @@ class SegmentsTranslateAgent(Agent):
         super().__init__(config)
         self.to_lang = config.to_lang
         self.force_json = config.force_json
-        self.system_prompt = f"""
-# Role
-- You are a professional, authentic machine translation engine.
-"""
+        self.system_prompt = _build_system_prompt(self.to_lang)
         self.custom_prompt = config.custom_prompt
         if config.custom_prompt:
             self.system_prompt += "\n# **Important rules or background** \n" + self.custom_prompt + '\nEND\n'
@@ -102,7 +99,9 @@ class SegmentsTranslateAgent(Agent):
     def _pre_send_handler(self, system_prompt, prompt):
         if self.glossary_dict:
             glossary = Glossary(glossary_dict=self.glossary_dict)
-            system_prompt += glossary.append_system_prompt(prompt)
+            incremental_glossary = glossary.build_incremental_prompt(prompt)
+            if incremental_glossary:
+                prompt = incremental_glossary + "\n" + prompt
         return system_prompt, prompt
 
     def get_continue_prompt(self, accumulated_result: str, prompt: str) -> str:

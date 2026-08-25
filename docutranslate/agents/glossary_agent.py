@@ -17,37 +17,38 @@ from docutranslate.utils.json_utils import segments2json_chunks, parse_json_resp
 
 
 def generate_prompt(json_segments: str, to_lang: str):
-    return f"""
-You will receive a JSON-formatted list of paragraphs where keys are paragraph numbers and values are paragraph contents.
-You need to extract person names and location names from these paragraphs and translate these terms into {to_lang}.
-Finally, output a glossary of original terms:translated terms
-
-Here is the input:
-
+    """Build the dynamic suffix; reusable extraction rules live in the system prompt."""
+    return f"""Extract glossary terms from this input for translation into {to_lang}:
 <input>
 ```json
 {json_segments}
 ```
 </input>
+"""
 
-<Requirement>
-- The original language is identified based on the context.The target language is {to_lang}
-- The same src should only appear once in the glossary without repetition
-- Do not include special tags or tags formatted as `<ph-xxxxxx>` in the glossary
-- Do not include common nouns in the glossary.
-- No explanation in Translated Term.
-</Requirement>
 
-The output format should be plain JSON text in a JSON array format:
-[{{"src": "<Original Term>", "dst": "<Translated Term>"}}]
+def _build_system_prompt(to_lang: str) -> str:
+    return f"""# Role
+You are a professional glossary extractor.
 
-<example>
-Assuming the source language is English and the target language is Chinese in the example
+# Task
+You will receive paragraphs represented as JSON. Identify person names and location names, infer the source language from context, and translate the extracted terms into {to_lang}.
+
+# Requirements
+- Include each source term only once.
+- Exclude common nouns, special tags, and tags formatted as `<ph-xxxxxx>`.
+- Do not add explanations to translated terms.
+- Return plain JSON only as an array of objects using the format `[{{"src":"<Original Term>","dst":"<Translated Term>"}}]`.
+
+# Example
 Input:
+```json
 {{"0":"Jobs likes apples","1":"Bill Gates is sunbathing in Shanghai."}}
+```
 Output:
-{r'[{"src": "Jobs", "dst": "乔布斯"}, {"src": "Bill Gates", "dst": "比尔盖茨"}, {"src": "Shanghai", "dst": "上海"}]'}
-</example>
+```json
+[{r'{"src":"Jobs","dst":"乔布斯"}'}, {r'{"src":"Bill Gates","dst":"比尔盖茨"}'}, {r'{"src":"Shanghai","dst":"上海"}'}]
+```
 """
 
 
@@ -77,10 +78,7 @@ class GlossaryAgent(Agent):
         super().__init__(config)
         self.to_lang = config.to_lang
         self.force_json=config.force_json
-        self.system_prompt = f"""
-# Role
-You are a professional glossary extractor
-"""
+        self.system_prompt = _build_system_prompt(self.to_lang)
         self.custom_prompt = config.custom_prompt
         if config.custom_prompt:
             self.system_prompt += "\n# **Important rules or background** \n" + self.custom_prompt + '\nEND\n'

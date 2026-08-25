@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import inspect
 from pathlib import Path
 
@@ -6,6 +7,22 @@ import pytest
 from pydantic import TypeAdapter
 
 import docutranslate.sdk as sdk_module
+from docutranslate.agents.agent import Agent, AgentConfig
+from docutranslate.agents.glossary_agent import (
+    GlossaryAgent,
+    GlossaryAgentConfig,
+    generate_prompt as generate_glossary_prompt,
+)
+from docutranslate.agents.markdown_agent import (
+    MDTranslateAgent,
+    MDTranslateAgentConfig,
+    generate_prompt as generate_markdown_prompt,
+)
+from docutranslate.agents.segments_agent import (
+    SegmentsTranslateAgent,
+    SegmentsTranslateAgentConfig,
+    generate_prompt as generate_segments_prompt,
+)
 from docutranslate.core.schemas import (
     DocxWorkflowParams,
     TranslatePayload,
@@ -163,3 +180,116 @@ def test_every_translator_agent_config_forwards_stream_policy_fields():
             checked_calls.append((source_file.name, node.lineno, node.func.id))
 
     assert len(checked_calls) == 11
+
+
+def test_segment_and_markdown_prompts_keep_rules_in_a_stable_prefix():
+    shared = {
+        "base_url": "https://example.invalid/v1",
+        "api_key": "test-key",
+        "model_id": "test-model",
+        "to_lang": "中文",
+        "glossary_dict": {
+            "Beta": "贝塔",
+            "Alpha": "阿尔法",
+            "Unused": "未使用",
+        },
+    }
+    cases = [
+        (
+            SegmentsTranslateAgent(SegmentsTranslateAgentConfig(**shared)),
+            generate_segments_prompt('{"0":"Alpha text"}', "中文"),
+            generate_segments_prompt('{"0":"Beta text"}', "中文"),
+            "Every input ID must appear exactly once",
+        ),
+        (
+            MDTranslateAgent(MDTranslateAgentConfig(**shared)),
+            generate_markdown_prompt("# Alpha text", "中文"),
+            generate_markdown_prompt("# Beta text", "中文"),
+            "Output the translated markdown only",
+        ),
+    ]
+
+    for agent, alpha_prompt, beta_prompt, static_rule in cases:
+        alpha_system, alpha_user = agent._pre_send_handler(
+            agent.system_prompt, alpha_prompt
+        )
+        beta_system, beta_user = agent._pre_send_handler(
+            agent.system_prompt, beta_prompt
+        )
+
+        assert alpha_system == beta_system == agent.system_prompt
+        assert static_rule in agent.system_prompt
+        assert "Alpha text" not in agent.system_prompt
+        assert "Beta text" not in agent.system_prompt
+        assert "Alpha=>阿尔法" in alpha_user
+        assert "Beta=>贝塔" not in alpha_user
+        assert "Unused=>未使用" not in alpha_user
+        assert "Beta=>贝塔" in beta_user
+        assert "Alpha=>阿尔法" not in beta_user
+        assert "Unused=>未使用" not in beta_user
+
+
+def test_glossary_extraction_prompt_keeps_static_rules_before_dynamic_input():
+    agent = GlossaryAgent(
+        GlossaryAgentConfig(
+            base_url="https://example.invalid/v1",
+            api_key="test-key",
+            model_id="test-model",
+            to_lang="中文",
+        )
+    )
+    first_prompt = generate_glossary_prompt('{"0":"DynamicPersonOne"}', "中文")
+    second_prompt = generate_glossary_prompt('{"0":"DynamicPlaceTwo"}', "中文")
+
+    assert "Include each source term only once" in agent.system_prompt
+    assert "DynamicPersonOne" not in agent.system_prompt
+    assert "DynamicPlaceTwo" not in agent.system_prompt
+    assert "Include each source term only once" not in first_prompt
+    assert "DynamicPersonOne" in first_prompt
+    assert "DynamicPlaceTwo" in second_prompt
+
+
+@pytest.mark.asyncio
+async def test_deepseek_batch_warms_two_prompts_before_parallel_fanout(
+    monkeypatch,
+):
+    agent = Agent(
+        AgentConfig(
+            base_url="https://api.deepseek.com",
+            api_key="test-key",
+            model_id="deepseek-chat",
+            provider="deepseek",
+            concurrent=4,
+        )
+    )
+    events = []
+    active = 0
+    max_active = 0
+
+    async def fake_send_async(*, prompt, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        events.append(("start", prompt))
+        await asyncio.sleep(0.01)
+        events.append(("end", prompt))
+        active -= 1
+        return f"translated:{prompt}"
+
+    monkeypatch.setattr(agent, "send_async", fake_send_async)
+
+    results = await agent.send_prompts_async(["p1", "p2", "p3", "p4"])
+
+    assert events[:4] == [
+        ("start", "p1"),
+        ("end", "p1"),
+        ("start", "p2"),
+        ("end", "p2"),
+    ]
+    assert max_active == 2
+    assert results == [
+        "translated:p1",
+        "translated:p2",
+        "translated:p3",
+        "translated:p4",
+    ]
