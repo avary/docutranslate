@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from docutranslate.exporter.base import ExporterConfig
 from docutranslate.exporter.epub.base import EpubExporter
 from docutranslate.ir.document import Document
+from docutranslate.logger import global_logger
 
 
 @dataclass
@@ -179,12 +180,11 @@ class Epub2HTMLExporter(EpubExporter):
                 html_files.append(filename)
         return sorted(html_files)
 
-    # def _debug_epub_structure(self, zip_file):
+    def _debug_epub_structure(self, zip_file):
         """调试 EPUB 结构，打印所有文件"""
-        print("=== EPUB 文件结构 ===")
+        global_logger.debug("EPUB 文件结构:")
         for file_info in zip_file.filelist:
-            print(f"文件: {file_info.filename}")
-        print("==================")
+            global_logger.debug("EPUB 文件: %s", file_info.filename)
 
     def export(self, document: Document) -> Document:
         """

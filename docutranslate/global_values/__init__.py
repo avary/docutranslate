@@ -12,5 +12,3 @@ USE_PROXY = (
     )
     else False
 )
-if USE_PROXY:
-    print(f"USE_PROXY:{USE_PROXY}")

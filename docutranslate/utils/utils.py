@@ -12,6 +12,19 @@ def mask_secrets(text: str) -> str:
     if not text:
         return text
 
+    # Authorization headers and bearer credentials may contain characters
+    # outside the usual API-key alphabet, so mask them before narrower rules.
+    text = re.sub(
+        r'(?i)(authorization["\']?\s*[:=]\s*["\']?bearer\s+)([^\s,"\']+)',
+        r'\1[BEARER_TOKEN_HIDDEN]',
+        text,
+    )
+    text = re.sub(
+        r'(?i)(bearer\s+)([a-z0-9_./+\-=]{10,})',
+        r'\1[BEARER_TOKEN_HIDDEN]',
+        text,
+    )
+
     # 隐藏 api_key
     text = re.sub(
         r'(["\']?api_key["\']?\s*[:=]\s*["\']?)([a-zA-Z0-9_\-\.]{4,})(["\']?)',
@@ -45,9 +58,16 @@ def mask_secrets(text: str) -> str:
 
     # 隐藏以 "token" 结尾或包含 "token" 的长字符串值
     text = re.sub(
-        r'([a-zA-Z_]+token[a-zA-Z_]*["\']?\s*[:=]\s*["\']?)([a-zA-Z0-9_\-\.]{10,})',
+        r'([a-zA-Z_]+token[a-zA-Z_]*["\']?\s*[:=]\s*["\']?)(?!\[)([^\s,"\']{10,})',
         r'\1[HIDDEN]',
         text
+    )
+
+    # Common credential field names used by OpenAI-compatible gateways.
+    text = re.sub(
+        r'(?i)((?:access_key|secret_key|client_secret|password)["\']?\s*[:=]\s*["\']?)([^\s,"\']{4,})',
+        r'\1[HIDDEN]',
+        text,
     )
 
     return text

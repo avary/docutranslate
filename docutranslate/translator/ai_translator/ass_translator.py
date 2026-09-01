@@ -139,7 +139,7 @@ class AssTranslator(AiTranslator):
         subs, lines_to_translate, original_texts = self._pre_translate(document)
 
         if subs is None or not lines_to_translate:
-            print("\n未找到需要翻译的字幕行。")
+            self.logger.info("未找到需要翻译的字幕行")
             return self
 
         if self.glossary_agent:
@@ -166,7 +166,7 @@ class AssTranslator(AiTranslator):
         subs, lines_to_translate, original_texts = await asyncio.to_thread(self._pre_translate, document)
 
         if subs is None or not lines_to_translate:
-            print("\n未找到需要翻译的字幕行。")
+            self.logger.info("未找到需要翻译的字幕行")
             return self
 
         if self.glossary_agent:

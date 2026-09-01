@@ -43,6 +43,7 @@ from docutranslate.server import (
 
 from docutranslate import __version__
 from docutranslate.core.schemas import TranslatePayload
+from docutranslate.logger import global_logger
 from pydantic import TypeAdapter
 
 # MCP Server configuration
@@ -1137,7 +1138,9 @@ if MCP_AVAILABLE and FastMCP is not None and Context is not None:
 
             # Run the wrapper app with uvicorn
             import uvicorn
-            print(f"Starting MCP SSE server at http://{host}:{port}/mcp/sse")
+            global_logger.info(
+                "Starting MCP SSE server at http://%s:%s/mcp/sse", host, port
+            )
             uvicorn.run(wrapper_app, host=host, port=port)
         else:
             # Run stdio transport normally

@@ -364,18 +364,21 @@ def get_md_from_zip_url_with_inline_images(
 
 
     except httpx.HTTPStatusError as e:
-        raise Exception(
-            f"HTTP 错误 (httpx): {e.response.status_code} - {e.request.url}\n响应内容: {e.response.text[:200]}...")
+        request_id = e.response.headers.get("x-request-id", "-")
+        raise RuntimeError(
+            f"MinerU ZIP 下载失败: status={e.response.status_code}, "
+            f"request_id={request_id}"
+        ) from e
     except httpx.RequestError as e:
-        raise Exception(f"下载ZIP文件时发生错误 (httpx): {e}")
+        raise RuntimeError(
+            f"MinerU ZIP 下载网络错误: type={type(e).__name__}"
+        ) from e
     except zipfile.BadZipFile:
         raise Exception("错误: 下载的文件不是一个有效的ZIP压缩文件或已损坏。")
     except UnicodeDecodeError:
         raise Exception(f"错误: 无法使用 '{encoding}' 编码解码文件 '{filename_in_zip}' 的内容。")
     except Exception as e:
-        import traceback
-        traceback.print_exc()  # 打印完整的堆栈跟踪，便于调试
-        raise Exception(f"发生未知错误: {e}")
+        raise RuntimeError(f"处理 MinerU ZIP 结果时发生未知错误: {e}") from e
 
 
 async def get_md_from_zip_url_with_inline_images_async(
@@ -400,18 +403,21 @@ async def get_md_from_zip_url_with_inline_images_async(
 
 
     except httpx.HTTPStatusError as e:
-        raise Exception(
-            f"HTTP 错误 (httpx): {e.response.status_code} - {e.request.url}\n响应内容: {e.response.text[:200]}...")
+        request_id = e.response.headers.get("x-request-id", "-")
+        raise RuntimeError(
+            f"MinerU ZIP 下载失败: status={e.response.status_code}, "
+            f"request_id={request_id}"
+        ) from e
     except httpx.RequestError as e:
-        raise Exception(f"下载ZIP文件时发生错误 (httpx): {e}")
+        raise RuntimeError(
+            f"MinerU ZIP 下载网络错误: type={type(e).__name__}"
+        ) from e
     except zipfile.BadZipFile:
         raise Exception("错误: 下载的文件不是一个有效的ZIP压缩文件或已损坏。")
     except UnicodeDecodeError:
         raise Exception(f"错误: 无法使用 '{encoding}' 编码解码文件 '{filename_in_zip}' 的内容。")
     except Exception as e:
-        import traceback
-        traceback.print_exc()  # 打印完整的堆栈跟踪，便于调试
-        raise Exception(f"发生未知错误: {e}")
+        raise RuntimeError(f"处理 MinerU ZIP 结果时发生未知错误: {e}") from e
 
 
 if __name__ == '__main__':

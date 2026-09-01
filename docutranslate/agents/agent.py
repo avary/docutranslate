@@ -3,13 +3,16 @@
 
 import asyncio
 import codecs
+import hashlib
 import json
 import logging
 import re  # 新增：用于正则估算
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from contextlib import suppress
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import Literal, Callable, Any
 from urllib.parse import urlparse
@@ -27,12 +30,69 @@ from docutranslate.agents.thinking.controller import (
 )
 from docutranslate.config import LLM_STREAMING, NON_STREAM_TIMEOUT, STREAM_IDLE_TIMEOUT
 from docutranslate.logger import global_logger
-from docutranslate.utils.utils import get_httpx_proxies
+from docutranslate.utils.utils import get_httpx_proxies, mask_secrets
 
 MAX_REQUESTS_PER_ERROR = 15
 MAX_CONTINUE_FETCHES = 2  # 响应被截断时，最多继续获取的次数
+SLOW_REQUEST_LOG_INTERVAL = 60.0
+MAX_ERROR_BODY_LOG_LENGTH = 1000
 
 ThinkingMode = Literal["enable", "disable", "default"]
+
+
+@dataclass
+class _RequestLogTrace:
+    index: int
+    total: int
+    queued_at: float = field(default_factory=time.monotonic)
+    started_at: float | None = None
+    last_activity_at: float = field(default_factory=time.monotonic)
+    rate_limit_wait: float = 0.0
+    attempts: int = 0
+    transport: str = "pending"
+    phase: str = "等待并发槽"
+    response_header_seconds: float | None = None
+    first_data_seconds: float | None = None
+    response_chunks: int = 0
+    response_bytes: int = 0
+
+    @property
+    def label(self) -> str:
+        return f"[分片 {self.index}/{self.total}]"
+
+
+_REQUEST_LOG_TRACE: ContextVar[_RequestLogTrace | None] = ContextVar(
+    "docutranslate_request_log_trace",
+    default=None,
+)
+
+
+def _text_fingerprint(text: str) -> str:
+    """Return a non-reversible identifier without logging document content."""
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _safe_error_text(value: Any, limit: int = MAX_ERROR_BODY_LOG_LENGTH) -> str:
+    text = mask_secrets(str(value)).replace("\r", " ").replace("\n", " ")
+    if len(text) > limit:
+        return f"{text[:limit]}…(已截断，原长度 {len(text)})"
+    return text
+
+
+def _safe_endpoint(value: str) -> str:
+    """Keep endpoint diagnostics while removing credentials and query values."""
+    parsed = urlparse(value)
+    hostname = parsed.hostname
+    if not parsed.scheme or not hostname:
+        return "<invalid-endpoint>"
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    try:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        return "<invalid-endpoint>"
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{hostname}{port}{path}"
 
 
 def _parse_response_json(response: httpx.Response) -> dict:
@@ -314,10 +374,11 @@ class RateLimiter:
         if self.tpm is not None:
             self.token_timestamps.append((now, tokens))
 
-    async def acquire_async(self, tokens: int = 0):
-        """异步等待配额"""
+    async def acquire_async(self, tokens: int = 0) -> float:
+        """异步等待配额，并返回实际等待秒数。"""
+        started_at = time.monotonic()
         if self.rpm is None and self.tpm is None:
-            return
+            return 0.0
 
         while True:
             # print(f"[RateLimiter-Async] 准备获取锁...")
@@ -328,17 +389,18 @@ class RateLimiter:
                 if wait_time <= 0:
                     self._record_usage(tokens)
                     # print(f"[RateLimiter-Async] 释放锁 (成功获取配额)")
-                    return
+                    return time.monotonic() - started_at
 
                 # print(f"[RateLimiter-Async] 释放锁 (需等待 {wait_time:.2f}s)")
 
             # 释放锁后等待
             await asyncio.sleep(wait_time + 0.1)
 
-    def acquire_sync(self, tokens: int = 0):
-        """同步等待配额（线程阻塞）"""
+    def acquire_sync(self, tokens: int = 0) -> float:
+        """同步等待配额（线程阻塞），并返回实际等待秒数。"""
+        started_at = time.monotonic()
         if self.rpm is None and self.tpm is None:
-            return
+            return 0.0
 
         while True:
             # print(f"[RateLimiter-Sync] 准备获取锁...")
@@ -349,7 +411,7 @@ class RateLimiter:
                 if wait_time <= 0:
                     self._record_usage(tokens)
                     # print(f"[RateLimiter-Sync] 释放锁 (成功获取配额)")
-                    return
+                    return time.monotonic() - started_at
 
                 # print(f"[RateLimiter-Sync] 释放锁 (需等待 {wait_time:.2f}s)")
 
@@ -488,6 +550,36 @@ class Agent:
             user_extra_body=self._extra_body_data,
         )
 
+    def _request_label(self, retry_count: int | None = None) -> str:
+        trace = _REQUEST_LOG_TRACE.get()
+        label = trace.label if trace is not None else "[单请求]"
+        if retry_count is not None:
+            return f"{label}[尝试 {retry_count + 1}/{self.retry + 1}]"
+        return label
+
+    def _log_attempt_failure(
+            self,
+            message: str,
+            *,
+            retry: bool,
+            retry_count: int,
+    ) -> None:
+        log = self.logger.warning if retry and retry_count < self.retry else self.logger.error
+        log(f"{self._request_label(retry_count)} {message}")
+
+    async def _monitor_slow_request(self, trace: _RequestLogTrace) -> None:
+        while True:
+            await asyncio.sleep(SLOW_REQUEST_LOG_INTERVAL)
+            now = time.monotonic()
+            elapsed = now - trace.queued_at
+            idle = now - trace.last_activity_at
+            self.logger.info(
+                f"{trace.label} 仍在处理: 阶段={trace.phase}, "
+                f"累计={elapsed:.1f}s, 最近活动={idle:.1f}s前, "
+                f"尝试={max(trace.attempts, 1)}, transport={trace.transport}, "
+                f"chunks={trace.response_chunks}, bytes={trace.response_bytes}"
+            )
+
     async def _request_completion_async(
             self,
             client: httpx.AsyncClient,
@@ -513,11 +605,17 @@ class Agent:
             headers: dict,
     ) -> dict:
         """请求一次 completion；优先流式，明确不支持时自动兼容非流式。"""
+        trace = _REQUEST_LOG_TRACE.get()
         if self._streaming_disabled:
             return await self._request_non_stream_async(client, data, headers)
 
         stream_data = dict(data)
         stream_data["stream"] = True
+        request_started_at = time.monotonic()
+        if trace is not None:
+            trace.transport = "stream"
+            trace.phase = "等待流式响应头"
+            trace.last_activity_at = request_started_at
         try:
             async with client.stream(
                     "POST",
@@ -526,16 +624,27 @@ class Agent:
                     headers=headers,
                     timeout=self.stream_timeout,
             ) as response:
+                if trace is not None:
+                    now = time.monotonic()
+                    trace.response_header_seconds = now - request_started_at
+                    trace.phase = "读取流式响应"
+                    trace.last_activity_at = now
                 if response.is_error:
                     await response.aread()
                 response.raise_for_status()
                 if response.is_stream_consumed:
                     accumulator = _StreamingResponseAccumulator()
                     accumulator.feed(response.content)
+                    if trace is not None:
+                        trace.first_data_seconds = time.monotonic() - request_started_at
+                        trace.response_chunks += 1
+                        trace.response_bytes += len(response.content)
+                        trace.last_activity_at = time.monotonic()
                     return accumulator.finish(response.content)
                 accumulator = _StreamingResponseAccumulator()
                 raw_body = bytearray()
                 iterator = response.aiter_raw()
+                saw_data = False
                 while not accumulator.done:
                     try:
                         chunk = await asyncio.wait_for(
@@ -550,6 +659,14 @@ class Agent:
                         ) from exc
                     if not chunk:
                         continue
+                    now = time.monotonic()
+                    if trace is not None:
+                        if not saw_data:
+                            trace.first_data_seconds = now - request_started_at
+                        trace.response_chunks += 1
+                        trace.response_bytes += len(chunk)
+                        trace.last_activity_at = now
+                    saw_data = True
                     raw_body.extend(chunk)
                     accumulator.feed(chunk)
                 return accumulator.finish(bytes(raw_body))
@@ -576,6 +693,12 @@ class Agent:
             headers: dict,
     ) -> dict:
         """执行非流式请求，并施加与流式空闲窗口独立的硬总时限。"""
+        trace = _REQUEST_LOG_TRACE.get()
+        request_started_at = time.monotonic()
+        if trace is not None:
+            trace.transport = "non-stream"
+            trace.phase = "等待非流式完整响应"
+            trace.last_activity_at = request_started_at
         total_timeout = asyncio.timeout(self.non_stream_total_timeout_seconds)
         try:
             async with total_timeout:
@@ -585,6 +708,14 @@ class Agent:
                     headers=headers,
                     timeout=self.timeout,
                 )
+                if trace is not None:
+                    now = time.monotonic()
+                    trace.response_header_seconds = now - request_started_at
+                    trace.first_data_seconds = now - request_started_at
+                    trace.response_chunks += 1
+                    trace.response_bytes += len(response.content)
+                    trace.last_activity_at = now
+                    trace.phase = "解析非流式响应"
         except TimeoutError as exc:
             if not total_timeout.expired():
                 raise
@@ -750,7 +881,10 @@ class Agent:
             if not self._extra_body_invalid:
                 data.update(self._extra_body_data)
             else:
-                self.logger.warning(f"Failed to parse extra_body JSON: {self.extra_body}")
+                self.logger.warning(
+                    "无法解析 extra_body JSON: "
+                    f"chars={len(self.extra_body)}, id={_text_fingerprint(self.extra_body)}"
+                )
 
         if json_format:
             data["response_format"] = {"type": "json_object"}
@@ -809,7 +943,6 @@ class Agent:
             # 安全提取 choices 和 content
             choices = response_data.get("choices", [])
             if not choices:
-                self.logger.error(f"API响应中未找到 choices 字段")
                 raise ValueError("API响应格式错误：缺少 choices 字段")
 
             choice = choices[0]
@@ -902,7 +1035,16 @@ class Agent:
         # 计算估算的 tokens (system + user)
         estimated_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(prompt)
         # 等待配额
-        await self.rate_limiter.acquire_async(tokens=estimated_tokens)
+        trace = _REQUEST_LOG_TRACE.get()
+        if trace is not None:
+            trace.attempts = max(trace.attempts, retry_count + 1)
+            trace.phase = "等待 RPM/TPM 配额"
+            trace.last_activity_at = time.monotonic()
+        rate_limit_wait = await self.rate_limiter.acquire_async(tokens=estimated_tokens)
+        if trace is not None:
+            trace.rate_limit_wait += rate_limit_wait
+            trace.phase = "发送 LLM 请求"
+            trace.last_activity_at = time.monotonic()
 
         headers, data = self._prepare_request_data(prompt, system_prompt, json_format=force_json)
         should_retry = False
@@ -916,7 +1058,6 @@ class Agent:
             # 检查 finish_reason
             choices = response_data.get("choices", [])
             if not choices:
-                self.logger.error(f"API响应中未找到 choices 字段")
                 raise ValueError("API响应格式错误：缺少 choices 字段")
 
             finish_reason = choices[0].get("finish_reason", None)
@@ -928,7 +1069,9 @@ class Agent:
                 pass
             elif finish_reason == "length":
                 # 长度限制，尝试继续获取
-                self.logger.warning(f"响应因长度限制被截断，尝试继续获取...")
+                self.logger.warning(
+                    f"{self._request_label(retry_count)} 响应因长度限制被截断，尝试继续获取"
+                )
                 # 注意：这里传入原始result，清理工作在 _continue_fetch_async 最终返回时统一处理
                 return await self._continue_fetch_async(
                     client=client,
@@ -943,7 +1086,10 @@ class Agent:
                 )
             elif finish_reason in ("tool_calls", "function_call"):
                 # 工具调用场景，当前代码可能不支持，直接返回已获取结果
-                self.logger.warning(f"finish_reason 为 '{finish_reason}'，当前不支持工具调用，返回已获取内容")
+                self.logger.warning(
+                    f"{self._request_label(retry_count)} finish_reason={finish_reason}，"
+                    "当前不支持工具调用，返回已获取内容"
+                )
                 result = self._sanitize_result(result)
                 return result if result else (
                     prompt if error_result_handler is None
@@ -951,14 +1097,19 @@ class Agent:
                 )
             elif finish_reason == "content_filter":
                 # 内容被过滤
-                self.logger.error(f"响应内容被过滤")
+                self.logger.error(f"{self._request_label(retry_count)} 响应内容被过滤")
                 raise ValueError("内容被过滤")
             elif finish_reason is None:
                 # 某些 API 可能不返回 finish_reason，将其视为正常结束
-                self.logger.warning(f"API未返回 finish_reason，视为正常结束")
+                self.logger.debug(
+                    f"{self._request_label(retry_count)} API未返回 finish_reason，视为正常结束"
+                )
             else:
                 # 其他未知的 finish_reason，记录警告并返回结果
-                self.logger.warning(f"未知的 finish_reason: '{finish_reason}'，返回已获取内容")
+                self.logger.warning(
+                    f"{self._request_label(retry_count)} 未知 finish_reason={finish_reason}，"
+                    "返回已获取内容"
+                )
 
             input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens = (
                 self.token_usage_parser.parse(response_data)
@@ -969,7 +1120,7 @@ class Agent:
             )
 
             if retry_count > 0:
-                self.logger.info(f"重试成功 (第 {retry_count}/{self.retry} 次尝试)。")
+                self.logger.info(f"{self._request_label(retry_count)} 重试成功")
 
             # 清理 <think> 标签后再处理结果
             result = self._sanitize_result(result)
@@ -981,41 +1132,74 @@ class Agent:
             )
 
         except AgentResultError as e:
-            self.logger.error(f"AI返回结果有误: {e}")
+            self._log_attempt_failure(
+                f"AI返回结果有误: {_safe_error_text(e)}",
+                retry=retry,
+                retry_count=retry_count,
+            )
             should_retry = True
         except PartialAgentResultError as e:
-            self.logger.error(f"收到部分返回结果，将尝试重试: {e}")
+            self._log_attempt_failure(
+                f"收到部分返回结果: {_safe_error_text(e)}",
+                retry=retry,
+                retry_count=retry_count,
+            )
             current_partial_result = e.partial_result
             should_retry = True
             if e.append_prompt:
                 prompt += e.append_prompt
 
         except httpx.HTTPStatusError as e:
-            self.logger.error(
-                f"AI请求HTTP状态错误 (async): {e.response.status_code} - {e.response.text}"
+            request_id = e.response.headers.get("x-request-id", "-")
+            self._log_attempt_failure(
+                f"LLM HTTP状态错误: status={e.response.status_code}, "
+                f"request_id={request_id}, body={_safe_error_text(e.response.text)}",
+                retry=retry,
+                retry_count=retry_count,
             )
             should_retry = True
             is_hard_error = True
             # 如果是因为 Rate Limit (429) 错误，最好在这里多睡一会儿，虽然我们有了本地 Limiter
             if e.response.status_code == 429:
+                self.logger.info(f"{self._request_label(retry_count)} 触发限流，等待 5.0s")
                 await asyncio.sleep(5)
 
         except httpx.RequestError as e:
-            # 根据错误类型给出更清晰的提示
-            if isinstance(e, httpx.ReadError):
-                self.logger.error(f"AI请求读取响应失败 (async): {type(e).__name__}: {e} (可能是服务器关闭连接或网络中断)")
+            if isinstance(e, httpx.TimeoutException):
+                detail = _safe_error_text(e)
+                if "流式响应连续" in detail:
+                    message = f"流式空闲超时: {detail}"
+                elif "非流式请求超过硬总时限" in detail:
+                    message = f"非流式硬总超时: {detail}"
+                else:
+                    message = f"网络阶段超时: {type(e).__name__}: {detail}"
+            elif isinstance(e, httpx.ReadError):
+                message = (
+                    f"读取响应失败: {type(e).__name__}: {_safe_error_text(e)} "
+                    "(服务器可能关闭连接或网络中断)"
+                )
             elif isinstance(e, httpx.ConnectError):
-                self.logger.error(f"AI请求连接失败 (async): {type(e).__name__}: {e} (无法连接到服务器，请检查网络或base_url)")
+                message = (
+                    f"连接失败: {type(e).__name__}: {_safe_error_text(e)} "
+                    "(请检查网络或 base_url)"
+                )
             elif isinstance(e, httpx.WriteError):
-                self.logger.error(f"AI请求发送数据失败 (async): {type(e).__name__}: {e}")
-            elif isinstance(e, httpx.TimeoutException):
-                self.logger.error(f"AI请求超时 (async): {type(e).__name__}: {e} (请求超过{self.timeout}秒未完成)")
+                message = f"发送请求数据失败: {type(e).__name__}: {_safe_error_text(e)}"
             else:
-                self.logger.error(f"AI请求连接错误 (async): {type(e).__name__}: {e}")
+                message = f"网络请求错误: {type(e).__name__}: {_safe_error_text(e)}"
+            self._log_attempt_failure(
+                message,
+                retry=retry,
+                retry_count=retry_count,
+            )
             should_retry = True
             is_hard_error = True
         except (KeyError, IndexError, ValueError, json.JSONDecodeError) as e:
-            self.logger.error(f"AI响应格式或值错误 (async), 将尝试重试: {repr(e)}")
+            self._log_attempt_failure(
+                f"LLM响应格式或值错误: {_safe_error_text(repr(e))}",
+                retry=retry,
+                retry_count=retry_count,
+            )
             should_retry = True
             is_hard_error = True
 
@@ -1052,9 +1236,12 @@ class Agent:
                         )
                     )
 
-            self.logger.info(f"正在重试第 {retry_count + 1}/{self.retry} 次...")
             # 指数退避
-            await asyncio.sleep(0.5 * (2 ** retry_count))
+            retry_delay = 0.5 * (2 ** retry_count)
+            self.logger.info(
+                f"{self._request_label(retry_count)} 将在 {retry_delay:.1f}s 后重试"
+            )
+            await asyncio.sleep(retry_delay)
             return await self.send_async(
                 client,
                 prompt,
@@ -1069,12 +1256,14 @@ class Agent:
             )
         else:
             if should_retry:
-                self.logger.error(f"所有重试均失败，已达到重试次数上限。")
+                self.logger.error(f"{self._request_label(retry_count)} 所有尝试均失败")
                 with self.unresolved_error_lock:
                     self.unresolved_error_count += 1
 
             if best_partial_result:
-                self.logger.info("所有重试失败，但存在部分翻译结果，将使用该结果。")
+                self.logger.info(
+                    f"{self._request_label(retry_count)} 存在部分翻译结果，将使用该结果"
+                )
                 return best_partial_result
 
             return (
@@ -1102,7 +1291,7 @@ class Agent:
         transport_mode = "non-stream" if self._streaming_disabled else "stream"
 
         self.logger.info(
-            f"provider:{self.provider},base-url:{self.baseurl},model-id:{self.model_id},concurrent:{max_concurrent}{rpm_info}{tpm_info},temperature:{self.temperature},"
+            f"provider:{self.provider},base-url:{_safe_endpoint(self.baseurl)},model-id:{self.model_id},concurrent:{max_concurrent}{rpm_info}{tpm_info},temperature:{self.temperature},"
             f"transport:{transport_mode},timeouts(stream-idle:{self.stream_idle_timeout_seconds}s,stream-total:none,"
             f"non-stream-total:{self.non_stream_total_timeout_seconds}s,non-stream-read:{self.timeout.read}s,"
             f"connect:{self.timeout.connect}s,write:{self.timeout.write}s,pool:{self.timeout.pool}s),"
@@ -1133,53 +1322,105 @@ class Agent:
                 trust_env=False, mounts=proxies, verify=False, limits=limits
         ) as client:
             async def send_with_semaphore(p_text: str, prompt_index: int):
-                async with semaphore:
-                    # 注意：我们在 semaphore 内部调用 send_async
-                    # send_async 内部会调用 rate_limiter.acquire_async
-                    # 这样可以防止并发过高，同时 rate_limiter 防止频率过快
-                    async def perform_send():
-                        return await self.send_async(
-                            client=client,
-                            prompt=p_text,
-                            system_prompt=system_prompt,
-                            force_json=force_json,
-                            pre_send_handler=pre_send_handler,
-                            result_handler=result_handler,
-                            error_result_handler=error_result_handler,
+                nonlocal count
+                trace = _RequestLogTrace(index=prompt_index, total=total)
+                context_token = _REQUEST_LOG_TRACE.set(trace)
+                monitor_task = asyncio.create_task(self._monitor_slow_request(trace))
+                try:
+                    async with semaphore:
+                        trace.started_at = time.monotonic()
+                        trace.last_activity_at = trace.started_at
+                        trace.phase = "准备请求"
+                        queue_wait = trace.started_at - trace.queued_at
+                        prompt_estimate = self._estimate_tokens(p_text)
+                        self.logger.info(
+                            f"{trace.label} 开始: id={_text_fingerprint(p_text)}, "
+                            f"chars={len(p_text)}, estimated_tokens={prompt_estimate}, "
+                            f"queue_wait={queue_wait:.2f}s"
                         )
 
-                    if self._streaming_disabled:
-                        total_timeout = asyncio.timeout(self.non_stream_total_timeout_seconds)
-                        try:
-                            async with total_timeout:
-                                result = await perform_send()
-                        except TimeoutError:
-                            # 非流式模式继续保留旧版“整个分片”的硬截止时间。
-                            if not total_timeout.expired():
-                                raise
-                            self.logger.error(
-                                f"非流式分片 {prompt_index}/{total} 超过总时限 "
-                                f"{self.non_stream_total_timeout_seconds} 秒，"
-                                "已终止该分片并使用降级结果。"
+                        # 注意：我们在 semaphore 内部调用 send_async。
+                        # 并发槽与 RPM/TPM 等待分别计时，便于判断慢在哪一层。
+                        async def perform_send():
+                            return await self.send_async(
+                                client=client,
+                                prompt=p_text,
+                                system_prompt=system_prompt,
+                                force_json=force_json,
+                                pre_send_handler=pre_send_handler,
+                                result_handler=result_handler,
+                                error_result_handler=error_result_handler,
                             )
-                            with self.unresolved_error_lock:
-                                self.unresolved_error_count += 1
-                            result = (
-                                p_text
-                                if error_result_handler is None
-                                else error_result_handler(p_text, self.logger)
+
+                        if self._streaming_disabled:
+                            total_timeout = asyncio.timeout(
+                                self.non_stream_total_timeout_seconds
                             )
-                    else:
-                        # DeepSeek Harness 风格：流式请求没有总墙钟上限，
-                        # 仅由每次收到原始数据都会重置的 idle watchdog 判定超时。
-                        result = await perform_send()
-                    nonlocal count
+                            try:
+                                async with total_timeout:
+                                    result = await perform_send()
+                            except TimeoutError:
+                                if not total_timeout.expired():
+                                    raise
+                                self.logger.error(
+                                    f"{trace.label} 非流式分片硬总超时: "
+                                    f"limit={self.non_stream_total_timeout_seconds}s，"
+                                    "已终止并使用降级结果"
+                                )
+                                with self.unresolved_error_lock:
+                                    self.unresolved_error_count += 1
+                                result = (
+                                    p_text
+                                    if error_result_handler is None
+                                    else error_result_handler(p_text, self.logger)
+                                )
+                        else:
+                            # 流式请求没有墙钟总时限，只由滑动空闲窗口判定。
+                            result = await perform_send()
+
                     count += 1
-                    self.logger.info(f"协程-已完成{count}/{total}")
-                    # 调用进度回调
+                    completed_at = time.monotonic()
+                    trace.phase = "完成"
+                    trace.last_activity_at = completed_at
+                    total_elapsed = completed_at - trace.queued_at
+                    queue_wait = (trace.started_at or trace.queued_at) - trace.queued_at
+                    first_data = (
+                        f"{trace.first_data_seconds:.2f}s"
+                        if trace.first_data_seconds is not None
+                        else "n/a"
+                    )
+                    response_headers = (
+                        f"{trace.response_header_seconds:.2f}s"
+                        if trace.response_header_seconds is not None
+                        else "n/a"
+                    )
+                    self.logger.info(
+                        f"{trace.label} 完成: progress={count}/{total}, "
+                        f"total={total_elapsed:.2f}s, queue={queue_wait:.2f}s, "
+                        f"rate_limit={trace.rate_limit_wait:.2f}s, "
+                        f"headers={response_headers}, first_data={first_data}, "
+                        f"attempts={max(trace.attempts, 1)}, "
+                        f"transport={trace.transport}, chunks={trace.response_chunks}, "
+                        f"bytes={trace.response_bytes}"
+                    )
                     if self.progress_callback:
                         self.progress_callback(count, total)
                     return result
+                except asyncio.CancelledError:
+                    self.logger.info(f"{trace.label} 已取消")
+                    raise
+                except Exception as exc:
+                    elapsed = time.monotonic() - trace.queued_at
+                    self.logger.error(
+                        f"{trace.label} 异常结束: elapsed={elapsed:.2f}s, "
+                        f"type={type(exc).__name__}, detail={_safe_error_text(exc)}"
+                    )
+                    raise
+                finally:
+                    monitor_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await monitor_task
+                    _REQUEST_LOG_TRACE.reset(context_token)
 
             results: list[Any] = [None] * total
 
@@ -1207,7 +1448,8 @@ class Agent:
                 await asyncio.gather(*tasks, return_exceptions=False)
 
             self.logger.info(
-                f"所有请求处理完毕。未解决的错误总数: {self.unresolved_error_count}"
+                f"所有请求处理完毕: requests={total}, "
+                f"unresolved_errors={self.unresolved_error_count}"
             )
 
             token_stats = self.token_counter.get_stats()
@@ -1217,10 +1459,11 @@ class Agent:
                 else 0.0
             )
             self.logger.info(
-                f"Token使用统计 - 输入: {token_stats['input_tokens'] / 1000:.2f}K(含cached: {token_stats['cached_tokens'] / 1000:.2f}K, "
-                f"命中率: {cache_hit_rate:.1%}), "
-                f"输出: {token_stats['output_tokens'] / 1000:.2f}K(含reasoning: {token_stats['reasoning_tokens'] / 1000:.2f}K), "
-                f"总计: {token_stats['total_tokens'] / 1000:.2f}K"
+                f"Token使用统计: input={token_stats['input_tokens']}, "
+                f"cached={token_stats['cached_tokens']}, cache_hit_rate={cache_hit_rate:.1%}, "
+                f"output={token_stats['output_tokens']}, "
+                f"reasoning={token_stats['reasoning_tokens']}, "
+                f"total={token_stats['total_tokens']}"
             )
 
             return results
@@ -1276,7 +1519,6 @@ class Agent:
             # 安全提取 choices 和 content
             choices = response_data.get("choices", [])
             if not choices:
-                self.logger.error(f"API响应中未找到 choices 字段")
                 raise ValueError("API响应格式错误：缺少 choices 字段")
 
             choice = choices[0]
@@ -1364,7 +1606,15 @@ class Agent:
 
         # 新增：同步环境下的速率限制
         estimated_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(prompt)
-        self.rate_limiter.acquire_sync(tokens=estimated_tokens)
+        trace = _REQUEST_LOG_TRACE.get()
+        if trace is not None:
+            trace.attempts = max(trace.attempts, retry_count + 1)
+            trace.phase = "等待 RPM/TPM 配额"
+        rate_limit_wait = self.rate_limiter.acquire_sync(tokens=estimated_tokens)
+        if trace is not None:
+            trace.rate_limit_wait += rate_limit_wait
+            trace.phase = "发送 LLM 请求"
+            trace.last_activity_at = time.monotonic()
 
         headers, data = self._prepare_request_data(prompt, system_prompt, json_format=force_json)
         should_retry = False
@@ -1377,7 +1627,6 @@ class Agent:
             # 检查 finish_reason
             choices = response_data.get("choices", [])
             if not choices:
-                self.logger.error(f"API响应中未找到 choices 字段")
                 raise ValueError("API响应格式错误：缺少 choices 字段")
 
             finish_reason = choices[0].get("finish_reason", None)
@@ -1389,7 +1638,9 @@ class Agent:
                 pass
             elif finish_reason == "length":
                 # 长度限制，尝试继续获取
-                self.logger.warning(f"响应因长度限制被截断，尝试继续获取...")
+                self.logger.warning(
+                    f"{self._request_label(retry_count)} 响应因长度限制被截断，尝试继续获取"
+                )
                 # 注意：这里传入原始result，清理工作在 _continue_fetch 最终返回时统一处理
                 return self._continue_fetch(
                     client=client,
@@ -1404,7 +1655,10 @@ class Agent:
                 )
             elif finish_reason in ("tool_calls", "function_call"):
                 # 工具调用场景，当前代码可能不支持，直接返回已获取结果
-                self.logger.warning(f"finish_reason 为 '{finish_reason}'，当前不支持工具调用，返回已获取内容")
+                self.logger.warning(
+                    f"{self._request_label(retry_count)} finish_reason={finish_reason}，"
+                    "当前不支持工具调用，返回已获取内容"
+                )
                 result = self._sanitize_result(result)
                 return result if result else (
                     prompt if error_result_handler is None
@@ -1412,14 +1666,19 @@ class Agent:
                 )
             elif finish_reason == "content_filter":
                 # 内容被过滤
-                self.logger.error(f"响应内容被过滤")
+                self.logger.error(f"{self._request_label(retry_count)} 响应内容被过滤")
                 raise ValueError("内容被过滤")
             elif finish_reason is None:
                 # 某些 API 可能不返回 finish_reason，将其视为正常结束
-                self.logger.warning(f"API未返回 finish_reason，视为正常结束")
+                self.logger.debug(
+                    f"{self._request_label(retry_count)} API未返回 finish_reason，视为正常结束"
+                )
             else:
                 # 其他未知的 finish_reason，记录警告并返回结果
-                self.logger.warning(f"未知的 finish_reason: '{finish_reason}'，返回已获取内容")
+                self.logger.warning(
+                    f"{self._request_label(retry_count)} 未知 finish_reason={finish_reason}，"
+                    "返回已获取内容"
+                )
 
             input_tokens, cached_tokens, output_tokens, reasoning_tokens, api_total_tokens = (
                 self.token_usage_parser.parse(response_data)
@@ -1430,7 +1689,7 @@ class Agent:
             )
 
             if retry_count > 0:
-                self.logger.info(f"重试成功 (第 {retry_count}/{self.retry} 次尝试)。")
+                self.logger.info(f"{self._request_label(retry_count)} 重试成功")
 
             # 清理 <think> 标签后再处理结果
             result = self._sanitize_result(result)
@@ -1441,38 +1700,71 @@ class Agent:
                 else result_handler(result, prompt, self.logger)
             )
         except AgentResultError as e:
-            self.logger.error(f"AI返回结果有误: {e}")
+            self._log_attempt_failure(
+                f"AI返回结果有误: {_safe_error_text(e)}",
+                retry=retry,
+                retry_count=retry_count,
+            )
             should_retry = True
         except PartialAgentResultError as e:
-            self.logger.error(f"收到部分翻译结果，将尝试重试: {e}")
+            self._log_attempt_failure(
+                f"收到部分翻译结果: {_safe_error_text(e)}",
+                retry=retry,
+                retry_count=retry_count,
+            )
             current_partial_result = e.partial_result
             should_retry = True
 
         except httpx.HTTPStatusError as e:
-            self.logger.error(
-                f"AI请求HTTP状态错误 (sync): {e.response.status_code} - {e.response.text}"
+            request_id = e.response.headers.get("x-request-id", "-")
+            self._log_attempt_failure(
+                f"LLM HTTP状态错误: status={e.response.status_code}, "
+                f"request_id={request_id}, body={_safe_error_text(e.response.text)}",
+                retry=retry,
+                retry_count=retry_count,
             )
             should_retry = True
             is_hard_error = True
             if e.response.status_code == 429:
+                self.logger.info(f"{self._request_label(retry_count)} 触发限流，等待 5.0s")
                 time.sleep(5)
 
         except httpx.RequestError as e:
-            # 根据错误类型给出更清晰的提示
-            if isinstance(e, httpx.ReadError):
-                self.logger.error(f"AI请求读取响应失败 (sync): {type(e).__name__}: {e} (可能是服务器关闭连接或网络中断)\nprompt:{prompt}")
+            if isinstance(e, httpx.TimeoutException):
+                detail = _safe_error_text(e)
+                if "流式响应连续" in detail:
+                    message = f"流式空闲超时: {detail}"
+                elif "非流式请求超过硬总时限" in detail:
+                    message = f"非流式硬总超时: {detail}"
+                else:
+                    message = f"网络阶段超时: {type(e).__name__}: {detail}"
+            elif isinstance(e, httpx.ReadError):
+                message = (
+                    f"读取响应失败: {type(e).__name__}: {_safe_error_text(e)} "
+                    "(服务器可能关闭连接或网络中断)"
+                )
             elif isinstance(e, httpx.ConnectError):
-                self.logger.error(f"AI请求连接失败 (sync): {type(e).__name__}: {e} (无法连接到服务器，请检查网络或base_url)\nprompt:{prompt}")
+                message = (
+                    f"连接失败: {type(e).__name__}: {_safe_error_text(e)} "
+                    "(请检查网络或 base_url)"
+                )
             elif isinstance(e, httpx.WriteError):
-                self.logger.error(f"AI请求发送数据失败 (sync): {type(e).__name__}: {e}\nprompt:{prompt}")
-            elif isinstance(e, httpx.TimeoutException):
-                self.logger.error(f"AI请求超时 (sync): {type(e).__name__}: {e} (请求超过{self.timeout}秒未完成)\nprompt:{prompt}")
+                message = f"发送请求数据失败: {type(e).__name__}: {_safe_error_text(e)}"
             else:
-                self.logger.error(f"AI请求连接错误 (sync): {type(e).__name__}: {e}\nprompt:{prompt}")
+                message = f"网络请求错误: {type(e).__name__}: {_safe_error_text(e)}"
+            self._log_attempt_failure(
+                message,
+                retry=retry,
+                retry_count=retry_count,
+            )
             should_retry = True
             is_hard_error = True
         except (KeyError, IndexError, ValueError, json.JSONDecodeError) as e:
-            self.logger.error(f"AI响应格式或值错误 (sync), 将尝试重试: {repr(e)}")
+            self._log_attempt_failure(
+                f"LLM响应格式或值错误: {_safe_error_text(repr(e))}",
+                retry=retry,
+                retry_count=retry_count,
+            )
             should_retry = True
             is_hard_error = True
 
@@ -1509,8 +1801,11 @@ class Agent:
                         )
                     )
 
-            self.logger.info(f"正在重试第 {retry_count + 1}/{self.retry} 次...")
-            time.sleep(0.5 * (2 ** retry_count))
+            retry_delay = 0.5 * (2 ** retry_count)
+            self.logger.info(
+                f"{self._request_label(retry_count)} 将在 {retry_delay:.1f}s 后重试"
+            )
+            time.sleep(retry_delay)
             return self.send(
                 client,
                 prompt,
@@ -1525,12 +1820,14 @@ class Agent:
             )
         else:
             if should_retry:
-                self.logger.error(f"所有重试均失败，已达到重试次数上限。")
+                self.logger.error(f"{self._request_label(retry_count)} 所有尝试均失败")
                 with self.unresolved_error_lock:
                     self.unresolved_error_count += 1
 
             if best_partial_result:
-                self.logger.info("所有重试失败，但存在部分翻译结果，将使用该结果。")
+                self.logger.info(
+                    f"{self._request_label(retry_count)} 存在部分翻译结果，将使用该结果"
+                )
                 return best_partial_result
 
             return (

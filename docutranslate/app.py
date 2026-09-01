@@ -103,25 +103,32 @@ async def lifespan(app: FastAPI):
 
     global_logger.propagate = False
     global_logger.setLevel(logging.INFO)
-    print("应用启动完成，多任务状态已初始化。")
+    global_logger.info("应用启动完成，多任务状态已初始化")
     if hasattr(app.state, "port_to_use"):
         if getattr(app.state, "with_mcp", False) and MCP_AVAILABLE:
-            print(f"MCP SSE endpoint available at: http://127.0.0.1:{app.state.port_to_use}/mcp/sse")
-        print(f"服务接口文档: http://127.0.0.1:{app.state.port_to_use}/docs")
-        print(f"请用浏览器访问 http://127.0.0.1:{app.state.port_to_use}\n")
+            global_logger.info(
+                "MCP SSE endpoint: http://127.0.0.1:%s/mcp/sse",
+                app.state.port_to_use,
+            )
+        global_logger.info(
+            "服务接口文档: http://127.0.0.1:%s/docs", app.state.port_to_use
+        )
+        global_logger.info(
+            "WebUI: http://127.0.0.1:%s", app.state.port_to_use
+        )
 
 
     yield  # Application running...
 
     # --- Shutdown phase ---
-    print("正在关闭应用，开始清理资源...")
+    global_logger.info("正在关闭应用，开始清理资源")
 
     # Cleanup all tasks via translation service
     await translation_service.cleanup_all()
 
     # Close HTTP client
     await httpx_client.aclose()
-    print("应用关闭，资源已彻底释放。")
+    global_logger.info("应用关闭，资源已彻底释放")
 
 
 app = FastAPI(
@@ -179,15 +186,13 @@ def setup_mcp_integration(
         return None
 
     if not MCP_AVAILABLE:
-        print("\n" + "=" * 60)
-        print("WARNING: MCP dependencies not installed.")
-        print("To use --with-mcp, please install MCP dependencies:")
-        print("  pip install docutranslate[mcp]")
-        print("=" * 60 + "\n")
+        global_logger.warning(
+            "MCP 依赖未安装；如需 --with-mcp，请安装 docutranslate[mcp]"
+        )
         return None
 
     try:
-        print("Setting up MCP integration...")
+        global_logger.info("正在初始化 MCP 集成")
 
         # Mount MCP at /mcp path - pass the shared translation service
         # and the actual host/port that the web server is running on
@@ -202,9 +207,7 @@ def setup_mcp_integration(
 
         return translation_service
     except Exception as e:
-        print(f"Failed to setup MCP integration: {e}")
-        import traceback
-        traceback.print_exc()
+        global_logger.exception("MCP 集成初始化失败: %s", e)
         return None
 
 
@@ -1200,12 +1203,14 @@ def run_app(host=None, port: int | None = None, enable_CORS=False,
     try:
         port_to_use = find_free_port(initial_port)
         if port_to_use != initial_port:
-            print(f"端口 {initial_port} 被占用，将使用端口 {port_to_use} 代替")
-        print(f"正在启动 DocuTranslate WebUI 版本号：{__version__}")
+            global_logger.warning(
+                "端口 %s 被占用，将使用端口 %s", initial_port, port_to_use
+            )
+        global_logger.info("正在启动 DocuTranslate WebUI %s", __version__)
         app.state.port_to_use = port_to_use
         app.state.with_mcp = with_mcp
         if enable_CORS:
-            print(f"已开启跨域，allow_origin_regex：{allow_origin_regex}")
+            global_logger.info("已开启跨域: allow_origin_regex=%s", allow_origin_regex)
             app.add_middleware(
                 CORSMiddleware,
                 allow_origin_regex=allow_origin_regex,
@@ -1228,7 +1233,7 @@ def run_app(host=None, port: int | None = None, enable_CORS=False,
 
         uvicorn.run(app, host=host, port=port_to_use, workers=1)
     except Exception as e:
-        print(f"启动失败: {e}")
+        global_logger.exception("启动失败: %s", e)
 
 
 if __name__ == "__main__":

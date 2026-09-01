@@ -14,6 +14,8 @@ from pathlib import Path
 
 import charset_normalizer
 
+from docutranslate.logger import global_logger
+
 
 class MaskDict:
     def __init__(self):
@@ -66,7 +68,7 @@ def uris2placeholder(markdown: str, mask_dict: MaskDict):
 
         # 整个图片都替换为占位符
         mask_dict.set(id, match.group())
-        print(f"生成占位符<ph-{id}>")
+        global_logger.debug("生成图片占位符: ph-%s", id)
         return f"<ph-{id}>"
 
     uri_pattern = r'(!\[.*?\])\((.*?)\)'
@@ -80,7 +82,7 @@ def placeholder2uris(markdown: str, mask_dict: MaskDict):
         uri = mask_dict.get(id)
         if uri is None:
             return match.group()
-        print(f"占位符<ph-{id}>已还原为图片")
+        global_logger.debug("还原图片占位符: ph-%s", id)
         return uri
 
     ph_pattern = r"<\s*[pP][hH]\s*-\s*([a-zA-Z0-9]+)\s*>"
@@ -119,16 +121,16 @@ def embed_inline_image_from_zip(zip_bytes: bytes, filename_in_zip: str | None = 
         str | None: 包含内联图片的Markdown文本内容，如果发生错误则返回None。
     """
     zip_file_bytes = io.BytesIO(zip_bytes)
-    print("正在尝试打开内存中的ZIP存档...")
+    global_logger.debug("正在打开内存中的 ZIP 存档")
     with zipfile.ZipFile(zip_file_bytes, 'r') as archive:
-        print("ZIP存档已打开。")
+        global_logger.debug("ZIP 存档已打开: entries=%d", len(archive.namelist()))
 
         # --- 新增和修改的逻辑 ---
         target_md_filename = filename_in_zip
 
         # 如果未指定文件名，则自动查找第一个Markdown文件
         if target_md_filename is None:
-            print("`正在自动查找第一个Markdown文件...")
+            global_logger.debug("正在自动查找第一个 Markdown 文件")
             found_md = None
             for name in archive.namelist():
                 # 确保它是一个文件（不是目录），并检查扩展名
@@ -138,22 +140,25 @@ def embed_inline_image_from_zip(zip_bytes: bytes, filename_in_zip: str | None = 
 
             if found_md:
                 target_md_filename = found_md
-                print(f"已自动选择Markdown文件: '{target_md_filename}'")
+                global_logger.info("已自动选择 Markdown 文件: %s", target_md_filename)
             else:
-                print("错误: ZIP压缩包中未找到任何Markdown文件 (.md 或 .markdown)。")
-                print(f"压缩包中的可用文件列表: {archive.namelist()}")
+                global_logger.error(
+                    "ZIP 中未找到 Markdown 文件: entries=%d", len(archive.namelist())
+                )
                 return None
 
         # 统一检查最终确定的文件是否存在于压缩包中
         if target_md_filename not in archive.namelist():
-            print(f"错误: 文件 '{target_md_filename}' 在ZIP压缩包中未找到。")
-            print(f"压缩包中的可用文件列表: {archive.namelist()}")
+            global_logger.error(
+                "ZIP 中找不到目标 Markdown 文件: filename=%s, entries=%d",
+                target_md_filename,
+                len(archive.namelist()),
+            )
             return None
 
         # --- 后续代码使用 target_md_filename ---
-        print(f"正在读取文件 '{target_md_filename}'...")
+        global_logger.debug("正在读取 ZIP 内文件: %s", target_md_filename)
         md_content_bytes = archive.read(target_md_filename)
-        print(f"文件 '{target_md_filename}' 已读取。")
 
         # 自动检测编码，解码时忽略无法解码的字节
         result = charset_normalizer.from_bytes(md_content_bytes).best()
@@ -162,9 +167,7 @@ def embed_inline_image_from_zip(zip_bytes: bytes, filename_in_zip: str | None = 
         else:
             detected_encoding = encoding
         md_content_text = md_content_bytes.decode(detected_encoding, errors='ignore')
-        print(f"文件内容已使用 '{detected_encoding}' 编码解码。")
-
-        print("开始处理Markdown中的图片...")
+        global_logger.debug("Markdown 解码完成: encoding=%s", detected_encoding)
         # 获取Markdown文件在ZIP包内的基本目录
         base_md_path_in_zip = os.path.dirname(target_md_filename)
 
@@ -192,23 +195,32 @@ def embed_inline_image_from_zip(zip_bytes: bytes, filename_in_zip: str | None = 
                     mime_type = mime_map.get(ext)
 
                 if not mime_type:
-                    print(f"    警告: 无法确定图片 '{image_path_in_zip}' 的MIME类型。跳过内联。")
+                    global_logger.warning(
+                        "无法确定 ZIP 内图片的 MIME 类型，跳过内联: %s",
+                        image_path_in_zip,
+                    )
                     return match.group(0)
 
                 base64_encoded_data = base64.b64encode(image_bytes).decode('utf-8')
                 new_image_tag = f"![{alt_text}](data:{mime_type};base64,{base64_encoded_data})"
                 return new_image_tag
             except KeyError:
-                print(f"    警告: 图片 '{image_path_in_zip}' 在ZIP压缩包中未找到。原始链接将被保留。")
+                global_logger.warning(
+                    "ZIP 内图片不存在，保留原始链接: %s", image_path_in_zip
+                )
                 return match.group(0)
             except Exception as e_img:
-                print(f"    错误: 处理图片 '{image_path_in_zip}' 时发生错误: {e_img}。原始链接将被保留。")
+                global_logger.error(
+                    "处理 ZIP 内图片失败，保留原始链接: path=%s, error=%s",
+                    image_path_in_zip,
+                    e_img,
+                )
                 return match.group(0)
 
         image_regex = r"!\[(.*?)\]\((.*?)\)"
         modified_md_content = re.sub(image_regex, replace_image_with_base64, md_content_text)
 
-        print("图片处理完成。")
+        global_logger.debug("Markdown 图片内联处理完成")
         return modified_md_content
 
 
@@ -258,7 +270,9 @@ def unembed_base64_images_to_zip(markdown: str, markdown_name: str, image_folder
                 # 返回替换后的 Markdown 图片链接
                 return f"![{alt_text}]({url})"
             except Exception as e:
-                print(f"Warning: Failed to decode base64 image in markdown. Error: {e}")
+                global_logger.warning(
+                    "Markdown 中的 base64 图片解码失败: %s", e
+                )
                 # 如果解码失败，返回原始匹配文本（不做替换），保证文档不丢失内容
                 return match.group(0)
 
@@ -364,7 +378,7 @@ def extract_and_process_html_tables(markdown_text: str) -> str:
                                 content.replace_with(processed_content)
             processed_tables[temp_id] = str(soup)
         except Exception as e:
-            print(f"处理表格时出错: {e}")
+            global_logger.error("处理 Markdown 表格失败: %s", e)
             processed_tables[temp_id] = table_html
 
     # 将处理后的表格替换回原始位置

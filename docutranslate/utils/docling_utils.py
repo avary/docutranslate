@@ -4,10 +4,13 @@
 import pathlib
 
 import docling.utils.model_downloader
+from docutranslate.logger import global_logger
+
+
 def get_docling_artifacts(output_dir=None):
     # path = StandardPdfPipeline.download_models_hf()
     path=docling.utils.model_downloader.download_models(output_dir)
-    print(f"docling模型包已经下载到{path.resolve()}")
+    global_logger.info("Docling 模型包已下载到 %s", path.resolve())
     return path
 #
 if __name__ == '__main__':

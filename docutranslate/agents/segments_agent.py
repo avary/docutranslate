@@ -222,7 +222,10 @@ class SegmentsTranslateAgent(Agent):
                     return result
                 repaired_array = flatten_and_filter(repaired_result)
             else:
-                raise AgentResultError(f"Agent返回结果不是array的json形式, result: {result}")
+                raise AgentResultError(
+                    "Agent返回结果不是array的json形式, "
+                    f"type={type(repaired_result).__name__}, chars={len(result)}"
+                )
 
             # 检查是否与原文完全相同（疑似翻译失败）
             # 按ID排序后比较，确保可靠性
@@ -293,7 +296,10 @@ class SegmentsTranslateAgent(Agent):
                 original_chunk[key] = f"{value}"
             return original_chunk
         except (RuntimeError, JSONDecodeError):
-            logger.error(f"原始prompt也不是有效的json格式: {original_segments}")
+            logger.error(
+                "原始prompt不是有效的json格式: chars=%d",
+                len(original_segments),
+            )
             # 如果原始prompt本身也无效，返回一个清晰的错误对象
             return {"error": f"{original_segments}"}
 
@@ -309,7 +315,10 @@ class SegmentsTranslateAgent(Agent):
         for chunk in translated_chunks:
             try:
                 if not isinstance(chunk, dict):
-                    self.logger.warning(f"接收到的chunk不是有效的字典，已跳过: {chunk}")
+                    self.logger.warning(
+                        "接收到的chunk不是有效字典，已跳过: type=%s",
+                        type(chunk).__name__,
+                    )
                     continue
                 for key, val in chunk.items():
                     if key in indexed_translated:
@@ -317,7 +326,9 @@ class SegmentsTranslateAgent(Agent):
                     else:
                         self.logger.warning(f"在结果chunk中发现未知键 '{key}'，已忽略。")
             except (AttributeError, TypeError) as e:
-                self.logger.error(f"处理chunk时发生类型或属性错误，已跳过。Chunk: {chunk}, 错误: {e.__repr__()}")
+                self.logger.error(
+                    "处理chunk时发生类型或属性错误，已跳过: %r", e
+                )
             except Exception as e:
                 self.logger.error(f"处理chunk时发生未知错误: {e.__repr__()}")
 
@@ -347,7 +358,10 @@ class SegmentsTranslateAgent(Agent):
         for chunk in translated_chunks:
             try:
                 if not isinstance(chunk, dict):
-                    self.logger.error(f"接收到的chunk不是有效的字典，已跳过: {chunk}")
+                    self.logger.error(
+                        "接收到的chunk不是有效字典，已跳过: type=%s",
+                        type(chunk).__name__,
+                    )
                     continue
                 for key, val in chunk.items():
                     if key in indexed_translated:
@@ -356,7 +370,9 @@ class SegmentsTranslateAgent(Agent):
                     else:
                         self.logger.warning(f"在结果chunk中发现未知键 '{key}'，已忽略。")
             except (AttributeError, TypeError) as e:
-                self.logger.error(f"处理chunk时发生类型或属性错误，已跳过。Chunk: {chunk}, 错误: {e.__repr__()}")
+                self.logger.error(
+                    "处理chunk时发生类型或属性错误，已跳过: %r", e
+                )
             except Exception as e:
                 self.logger.error(f"处理chunk时发生未知错误: {e.__repr__()}")
 

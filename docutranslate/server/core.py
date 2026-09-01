@@ -93,6 +93,7 @@ from docutranslate.exporter.pptx.pptx2html_exporter import PPTX2HTMLExporterConf
 
 
 MAX_LOG_HISTORY = 200
+MAX_LOG_QUEUE = 500
 AGENT_TIMEOUT_FIELDS = (
     "timeout",
     "connect_timeout",
@@ -143,31 +144,50 @@ class QueueAndHistoryHandler(logging.Handler):
         history_list_ref: List[str],
         max_history_items: int,
         task_id: str,
+        event_loop: asyncio.AbstractEventLoop | None = None,
     ):
         super().__init__()
         self.queue = queue_ref
         self.history_list = history_list_ref
         self.max_history = max_history_items
         self.task_id = task_id
+        self.event_loop = event_loop
+        self.dropped_logs = 0
 
-    def emit(self, record: logging.LogRecord):
-        log_entry = self.format(record)
-        # 过滤敏感信息后再存储和输出
-        masked_log_entry = mask_secrets(log_entry)
-        print(f"[{self.task_id}] {masked_log_entry}")
+    def _store(self, masked_log_entry: str) -> None:
         self.history_list.append(masked_log_entry)
         if len(self.history_list) > self.max_history:
             del self.history_list[: len(self.history_list) - self.max_history]
-        if self.queue is not None:
+        if self.queue is None:
+            return
+        if self.queue.full():
             try:
-                # Try to get the main event loop - this will be set by the application
-                self.queue.put_nowait(masked_log_entry)
-            except asyncio.QueueFull:
-                print(f"[{self.task_id}] Log queue is full. Log dropped: {masked_log_entry}")
-            except Exception as e:
-                print(
-                    f"[{self.task_id}] Error putting log to queue: {e}. Log: {masked_log_entry}"
-                )
+                self.queue.get_nowait()
+                self.queue.task_done()
+                self.dropped_logs += 1
+            except asyncio.QueueEmpty:
+                pass
+        self.queue.put_nowait(masked_log_entry)
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            log_entry = self.format(record)
+            masked_log_entry = mask_secrets(log_entry)
+            print(f"[{self.task_id}] {masked_log_entry}")
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            if (
+                self.event_loop is not None
+                and self.event_loop.is_running()
+                and running_loop is not self.event_loop
+            ):
+                self.event_loop.call_soon_threadsafe(self._store, masked_log_entry)
+            else:
+                self._store(masked_log_entry)
+        except Exception:
+            self.handleError(record)
 
 
 def get_workflow_type_from_filename(filename: str) -> str:
@@ -318,7 +338,12 @@ class TranslationService:
         # Auto workflow routing
         if payload.workflow_type == "auto":
             detected_type = get_workflow_type_from_filename(original_filename)
-            print(f"[{task_id}] 自动识别工作流: {original_filename} -> {detected_type}")
+            global_logger.info(
+                "[%s] 自动识别工作流: %s -> %s",
+                task_id,
+                original_filename,
+                detected_type,
+            )
 
             # 关键修复：完全手动构造 payload_data，不依赖 model_dump
             # 这样可以确保所有字段都正确传递，不会因为 exclude_none 或其他原因丢失
@@ -362,16 +387,32 @@ class TranslationService:
                         if isinstance(value, str) and value == "" and field_name != "mineru_token":
                             continue  # 跳过空字符串，除了 mineru_token
                         payload_data[field_name] = value
-                        print(f"[{task_id}] 复制字段 {field_name}: {type(value).__name__}" +
-                              (f" (len={len(value)})" if isinstance(value, str) else ""))
+                        global_logger.debug(
+                            "[%s] 复制字段 %s: %s%s",
+                            task_id,
+                            field_name,
+                            type(value).__name__,
+                            f" (len={len(value)})" if isinstance(value, str) else "",
+                        )
 
             # 调试日志
-            print(f"[{task_id}] payload_data keys: {sorted(payload_data.keys())}")
+            global_logger.debug(
+                "[%s] payload_data keys: %s", task_id, sorted(payload_data)
+            )
             if "mineru_token" in payload_data:
                 token = payload_data["mineru_token"]
-                print(f"[{task_id}] mineru_token in payload_data (length: {len(token)}, starts with: {token[:20] if len(token) > 20 else token}...)")
+                global_logger.debug(
+                    "[%s] mineru_token configured=%s, length=%d",
+                    task_id,
+                    bool(token),
+                    len(token),
+                )
             if "convert_engine" in payload_data:
-                print(f"[{task_id}] convert_engine: {payload_data['convert_engine']}")
+                global_logger.debug(
+                    "[%s] convert_engine=%s",
+                    task_id,
+                    payload_data["convert_engine"],
+                )
 
             if detected_type == "json" and not payload_data.get("json_paths"):
                 payload_data["json_paths"] = ["$..*"]
@@ -387,17 +428,24 @@ class TranslationService:
                 # 验证后再次检查
                 if hasattr(payload, "mineru_token"):
                     token = payload.mineru_token
-                    print(f"[{task_id}] After validation: mineru_token present (length: {len(token) if token else 0})")
-                    if token:
-                        print(f"[{task_id}] mineru_token starts with: {token[:20] if len(token) > 20 else token}")
+                    global_logger.debug(
+                        "[%s] 参数校验后 mineru_token configured=%s, length=%d",
+                        task_id,
+                        bool(token),
+                        len(token) if token else 0,
+                    )
                 if hasattr(payload, "convert_engine"):
-                    print(f"[{task_id}] After validation: convert_engine={payload.convert_engine}")
+                    global_logger.debug(
+                        "[%s] 参数校验后 convert_engine=%s",
+                        task_id,
+                        payload.convert_engine,
+                    )
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"自动转换工作流参数失败: {mask_secrets(str(e))}")
 
         if task_id not in self.tasks_state:
             self.tasks_state[task_id] = _create_default_task_state()
-            self.tasks_log_queues[task_id] = asyncio.Queue()
+            self.tasks_log_queues[task_id] = asyncio.Queue(maxsize=MAX_LOG_QUEUE)
             self.tasks_log_histories[task_id] = []
         task_state = self.tasks_state[task_id]
 
@@ -444,7 +492,7 @@ class TranslationService:
                 break
 
         initial_log_msg = f"收到新的翻译请求: {original_filename}"
-        print(f"[{task_id}] {initial_log_msg}")
+        global_logger.info("[%s] %s", task_id, initial_log_msg)
         await log_queue.put(initial_log_msg)
 
         try:
@@ -487,7 +535,11 @@ class TranslationService:
         if task_logger.hasHandlers():
             task_logger.handlers.clear()
         task_handler = QueueAndHistoryHandler(
-            log_queue, log_history, MAX_LOG_HISTORY, task_id=task_id
+            log_queue,
+            log_history,
+            MAX_LOG_HISTORY,
+            task_id=task_id,
+            event_loop=self.main_event_loop,
         )
         task_handler.setFormatter(
             logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -746,8 +798,6 @@ class TranslationService:
             if payload.convert_engine == "mineru":
                 token = payload.mineru_token or ""
                 task_logger.info(f"Creating ConverterMineruConfig with mineru_token (length: {len(token)})")
-                if token:
-                    task_logger.info(f"mineru_token starts with: {token[:20] if len(token) > 20 else token}")
                 converter_config = ConverterMineruConfig(
                     logger=task_logger,
                     mineru_token=token,
@@ -1313,7 +1363,7 @@ class TranslationService:
             task_state["current_task_ref"] = None
             raise HTTPException(status_code=400, detail="任务已完成或已被取消。")
 
-        print(f"[{task_id}] 收到取消翻译任务的请求。")
+        global_logger.info("[%s] 收到取消翻译任务的请求", task_id)
         task_to_cancel.cancel()
         task_state["status_message"] = "正在取消任务..."
         return {"cancelled": True, "message": "取消请求已发送。请等待状态更新。"}
@@ -1333,11 +1383,13 @@ class TranslationService:
             and task_state.get("current_task_ref")
         ):
             try:
-                print(f"[{task_id}] 任务正在进行中，将在释放前尝试取消。")
+                global_logger.info("[%s] 任务仍在进行，释放前尝试取消", task_id)
                 self.cancel_task(task_id)
                 message_parts.append("任务已被取消。")
             except HTTPException as e:
-                print(f"[{task_id}] 取消任务时出现预期中的情况（可能已完成）: {e.detail}")
+                global_logger.info(
+                    "[%s] 取消步骤已跳过（任务可能已完成）: %s", task_id, e.detail
+                )
                 message_parts.append(f"任务取消步骤已跳过（可能已完成或取消）。")
 
         if task_state:
@@ -1346,15 +1398,20 @@ class TranslationService:
                 try:
                     shutil.rmtree(temp_dir)
                     message_parts.append("临时文件已清理。")
-                    print(f"[{task_id}] 临时目录 '{temp_dir}' 已被删除。")
+                    global_logger.info("[%s] 临时目录已删除: %s", task_id, temp_dir)
                 except Exception as e:
                     message_parts.append(f"清理临时文件时出错: {e}。")
-                    print(f"[{task_id}] 删除临时目录 '{temp_dir}' 时出错: {e}")
+                    global_logger.error(
+                        "[%s] 删除临时目录失败: path=%s, error=%s",
+                        task_id,
+                        temp_dir,
+                        e,
+                    )
 
         self.tasks_state.pop(task_id, None)
         self.tasks_log_queues.pop(task_id, None)
         self.tasks_log_histories.pop(task_id, None)
-        print(f"[{task_id}] 资源已成功释放。")
+        global_logger.info("[%s] 资源已成功释放", task_id)
         message_parts.append(f"任务 '{task_id}' 的资源已释放。")
         return {"released": True, "message": " ".join(message_parts)}
 
@@ -1364,7 +1421,7 @@ class TranslationService:
         for task_id, task_state in self.tasks_state.items():
             task_ref = task_state.get("current_task_ref")
             if task_ref and not task_ref.done():
-                print(f"[{task_id}] 检测到未完成任务，正在强制取消...")
+                global_logger.info("[%s] 检测到未完成任务，正在强制取消", task_id)
                 task_ref.cancel()
                 pending_tasks.append(task_ref)
 
@@ -1376,17 +1433,24 @@ class TranslationService:
             if temp_dir and os.path.isdir(temp_dir):
                 try:
                     shutil.rmtree(temp_dir, ignore_errors=True)
-                    print(f"[{task_id}] 临时目录已清理: {temp_dir}")
+                    global_logger.info("[%s] 临时目录已清理: %s", task_id, temp_dir)
                 except Exception as e:
-                    print(f"[{task_id}] 清理临时目录 '{temp_dir}' 时出错: {e}")
+                    global_logger.error(
+                        "[%s] 清理临时目录失败: path=%s, error=%s",
+                        task_id,
+                        temp_dir,
+                        e,
+                    )
 
         # Cleanup HTTP client
         if self.httpx_client is not None:
             try:
                 await self.httpx_client.aclose()
-                print("[TranslationService] HTTP客户端已关闭")
+                global_logger.info("[TranslationService] HTTP客户端已关闭")
             except Exception as e:
-                print(f"[TranslationService] 关闭HTTP客户端时出错: {e}")
+                global_logger.error(
+                    "[TranslationService] 关闭HTTP客户端失败: %s", e
+                )
             finally:
                 self.httpx_client = None
 

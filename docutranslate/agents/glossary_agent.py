@@ -155,7 +155,10 @@ class GlossaryAgent(Agent):
             return []
         try:
             if not isinstance(repaired_result, list):
-                raise AgentResultError(f"GlossaryAgent返回结果不是list的json形式, result: {result}")
+                raise AgentResultError(
+                    "GlossaryAgent返回结果不是list的json形式, "
+                    f"type={type(repaired_result).__name__}, chars={len(result)}"
+                )
             # 过滤和展平：只保留 dict 类型的元素
             def flatten_and_filter(arr):
                 result = []
@@ -180,7 +183,9 @@ class GlossaryAgent(Agent):
         try:
             return json_repair.loads(origin_prompt)
         except (RuntimeError, JSONDecodeError):
-            logger.error(f"原始prompt也不是有效的json格式: {origin_prompt}")
+            logger.error(
+                "原始prompt不是有效的json格式: chars=%d", len(origin_prompt)
+            )
             return []  # 如果原始prompt也无效，返回空列表
 
     def send_segments(self, segments: list[str], chunk_size: int):
@@ -194,12 +199,17 @@ class GlossaryAgent(Agent):
         for chunk in translated_chunks:
             try:
                 if not isinstance(chunk, list):
-                    self.logger.error(f"接收到的chunk不是有效的列表，已跳过: {chunk}")
+                    self.logger.error(
+                        "接收到的chunk不是有效列表，已跳过: type=%s",
+                        type(chunk).__name__,
+                    )
                     continue
                 glossary_dict = {d["src"]: d["dst"] for d in chunk if isinstance(d, dict) and "src" in d and "dst" in d}
                 result = glossary_dict | result
             except (TypeError, KeyError) as e:
-                self.logger.error(f"处理glossary chunk时发生键或类型错误，已跳过。Chunk: {chunk}, 错误: {e.__repr__()}")
+                self.logger.error(
+                    "处理glossary chunk时发生键或类型错误，已跳过: %r", e
+                )
             except Exception as e:
                 self.logger.error(f"处理glossary chunk时发生未知错误: {e.__repr__()}")
 
@@ -218,12 +228,17 @@ class GlossaryAgent(Agent):
         for chunk in translated_chunks:
             try:
                 if not isinstance(chunk, list):
-                    self.logger.error(f"接收到的chunk不是有效的列表，已跳过: {chunk}")
+                    self.logger.error(
+                        "接收到的chunk不是有效列表，已跳过: type=%s",
+                        type(chunk).__name__,
+                    )
                     continue
                 glossary_dict = {d["src"]: d["dst"] for d in chunk if isinstance(d, dict) and "src" in d and "dst" in d}
                 result = result | glossary_dict
             except (TypeError, KeyError) as e:
-                self.logger.error(f"处理glossary chunk时发生键或类型错误，已跳过。Chunk: {chunk}, 错误: {e.__repr__()}")
+                self.logger.error(
+                    "处理glossary chunk时发生键或类型错误，已跳过: %r", e
+                )
             except Exception as e:
                 self.logger.error(f"处理glossary chunk时发生未知错误: {e.__repr__()}")
 

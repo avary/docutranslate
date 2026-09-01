@@ -572,7 +572,10 @@ class XlsxTranslator(AiTranslator):
             original_texts = self._get_texts_xml_all(document)
 
         if not original_texts:
-            print(f"\n未找到需要翻译的文本 (模式: {'区域' if self.translate_regions else '全文档'}).")
+            self.logger.info(
+                "未找到需要翻译的文本 (模式: %s)",
+                "区域" if self.translate_regions else "全文档",
+            )
             return self
 
         if self.glossary_agent:
@@ -603,7 +606,10 @@ class XlsxTranslator(AiTranslator):
             original_texts = await asyncio.to_thread(self._get_texts_xml_all, document)
 
         if not original_texts:
-            print(f"\n未找到需要翻译的文本 (模式: {'区域' if self.translate_regions else '全文档'}).")
+            self.logger.info(
+                "未找到需要翻译的文本 (模式: %s)",
+                "区域" if self.translate_regions else "全文档",
+            )
             return self
 
         if self.glossary_agent:
