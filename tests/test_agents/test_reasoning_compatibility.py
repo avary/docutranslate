@@ -122,6 +122,82 @@ def test_non_reasoning_openai_model_omits_reasoning_field():
     assert "reasoning_effort" not in data
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_effort"),
+    [
+        ("gpt-5", "minimal"),
+        ("gpt-5.1", "none"),
+        ("gpt-5.6", "none"),
+        ("gpt-5.1-codex-max", "none"),
+        ("gpt-5.2-pro", "none"),
+    ],
+)
+def test_openai_gpt5_disable_uses_supported_effort_values(model, expected_effort):
+    data = request_data(make_agent("default", model, "disable"))
+    assert data["reasoning_effort"] == expected_effort
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_effort"),
+    [
+        ("gpt-5-pro", "high"),
+        ("gpt-5.1-pro", "medium"),
+    ],
+)
+def test_openai_gpt5_enable_default_effort(model, expected_effort):
+    data = request_data(make_agent("default", model, "enable"))
+    assert data["reasoning_effort"] == expected_effort
+
+
+def test_openai_effort_catalog_matches_official_spec():
+    adapter = get_reasoning_adapter("default")
+    decision = adapter.decide("gpt-5.6", "enable")
+    assert decision.capability.supported_efforts == (
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+
+
+@pytest.mark.parametrize(
+    ("model",),
+    [
+        ("glm-5.3",),
+        ("glm-5.3-flash",),
+        ("glm-4.7",),
+    ],
+)
+def test_bigmodel_mandatory_reasoning_models_ignore_disable(model):
+    data = request_data(make_agent("bigmodel", model, "disable"))
+    assert "thinking" not in data
+    assert "reasoning_effort" not in data
+
+
+@pytest.mark.parametrize(
+    ("model", "thinking", "expected"),
+    [
+        ("glm-5.3", "enable", {"type": "enabled"}),
+        ("glm-4.7", "enable", {"type": "enabled"}),
+        ("glm-4.6", "enable", {"type": "enabled"}),
+        ("glm-5.2", "disable", {"type": "disabled"}),
+    ],
+)
+def test_bigmodel_thinking_control_still_applies_to_non_mandatory(
+    model, thinking, expected
+):
+    data = request_data(make_agent("bigmodel", model, thinking))
+    assert data["thinking"] == expected
+
+
+def test_bigmodel_mandatory_default_reports_support():
+    adapter = get_reasoning_adapter("bigmodel")
+    assert adapter.decide("glm-5.3", "default").capability.support == "mandatory"
+    assert adapter.decide("glm-4.6", "default").capability.support == "optional"
+
+
 def test_custom_gateway_does_not_guess_protocol_from_model_name():
     data = request_data(make_agent("default", "qwen3.5-custom", "enable"))
     assert data["reasoning_effort"] == "medium"
